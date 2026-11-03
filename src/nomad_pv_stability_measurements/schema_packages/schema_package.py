@@ -45,6 +45,7 @@ class NewSchemaPackage(Schema):
 #: removed or renamed, so that stored entries stay valid.
 MEASUREMENT_KINDS = [
     'jv',
+    'dark_jv',
     'mpp_tracking',
     'stability_series',
     'eqe',
@@ -53,6 +54,8 @@ MEASUREMENT_KINDS = [
     'impedance',
     'uv_vis',
     'image',
+    'pl_image',
+    'el_image',
     'environment_log',
     'metadata',
     'other',
@@ -131,7 +134,7 @@ class StabilityFile(ArchiveSection):
         type=str,
         description='The identifier of the sample as the institution writes it.',
     )
-    
+
     sample_reference = Quantity(
         type=str,
         description="""
