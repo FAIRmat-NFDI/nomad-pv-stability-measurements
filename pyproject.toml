@@ -129,6 +129,7 @@ where = ["src"]
 
 [project.entry-points.'nomad.plugin']
 parser_entry_point = "nomad_pv_stability_measurements.parsers:parser_entry_point"
+stability_file_parser_entry_point = "nomad_pv_stability_measurements.parsers:stability_file_parser_entry_point"
 schema_package_entry_point = "nomad_pv_stability_measurements.schema_packages:schema_package_entry_point"
 app_entry_point = "nomad_pv_stability_measurements.apps:app_entry_point"
 example_upload_entry_point = "nomad_pv_stability_measurements.example_uploads:example_upload_entry_point"

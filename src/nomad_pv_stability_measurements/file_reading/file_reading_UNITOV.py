@@ -10,56 +10,75 @@ header names the measurement in a line `Test<TAB><name>`:
     Dark JV                 a J–V sweep in the dark
     IPCE                    the external quantum efficiency
 
+The header also gives the measured sample in `Device`, and the start of the
+measurement in `Date` (`2023-10-19`) and `Time` (`18:34:18`). These times are the
+local time of the stations in Rome.
+
 Other files, such as the PDF plots exported next to Dark JV and IPCE measurements,
 are of kind `unknown`.
 """
 
-import re
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 INSTITUTION = 'UNITOV'
 
-_TEST = re.compile(r'^Test\t([^\t\r\n]*)', re.MULTILINE)
-_ALGORITHM = re.compile(r'^Algorithm\t([^\t\r\n]*)', re.MULTILINE)
+_LOCAL_TIME_ZONE = ZoneInfo('Europe/Rome')
 
 
-def _header_value(pattern: re.Pattern, content: str) -> str | None:
-    """The value of a header line, or `None` if the file is not a UNITOV text file
-    or has no such line."""
+def _match(content: str, test: str, mppt: bool | None = None) -> tuple | bool:
+    """What every `match_<kind>` function returns: `False` unless `content` is a
+    UNITOV text file whose `Test` line is `test`, otherwise its start time and sample.
+
+    `mppt` also checks the `Algorithm` line: `True` if it must be `MPPT`, `False` if
+    it must not, `None` to ignore it."""
     if not content.startswith('## Header ##'):
-        return None
-    match = pattern.search(content)
-    return match.group(1).strip() if match else None
+        return False
+
+    # The first value of each `<key><TAB><value>` line; the header comes first.
+    header = {}
+    for line in content.splitlines():
+        key, _, values = line.partition('\t')
+        header.setdefault(key.strip(), values.split('\t')[0].strip())
+
+    if header.get('Test') != test:
+        return False
+    if mppt is not None and (header.get('Algorithm') == 'MPPT') != mppt:
+        return False
+
+    time_stamp = None
+    if header.get('Date') and header.get('Time'):
+        start = datetime.fromisoformat(f'{header["Date"]}T{header["Time"]}')
+        time_stamp = start.replace(tzinfo=_LOCAL_TIME_ZONE)
+    sample_id = header.get('Device') or None
+    sample_reference = None
+    data = {}
+    return time_stamp, sample_id, sample_reference, data
 
 
-def match_jv(path: str, content: str) -> bool:
+def match_jv(path: str, content: str) -> tuple | bool:
     """A J–V sweep under light during a stability test."""
-    return _header_value(_TEST, content) == 'Stability (JV)'
+    return _match(content, 'Stability (JV)')
 
 
-def match_dark_jv(path: str, content: str) -> bool:
+def match_dark_jv(path: str, content: str) -> tuple | bool:
     """A J–V sweep in the dark."""
-    return _header_value(_TEST, content) == 'Dark JV'
+    return _match(content, 'Dark JV')
 
 
-def match_mpp_tracking(path: str, content: str) -> bool:
+def match_mpp_tracking(path: str, content: str) -> tuple | bool:
     """The series of a stability test that tracks the maximum power point."""
-    return (
-        _header_value(_TEST, content) == 'Stability (Tracking)'
-        and _header_value(_ALGORITHM, content) == 'MPPT'
-    )
+    return _match(content, 'Stability (Tracking)', mppt=True)
 
 
-def match_stability_series(path: str, content: str) -> bool:
+def match_stability_series(path: str, content: str) -> tuple | bool:
     """The other series of a stability test: one held at a fixed voltage, and the
     figures of merit of its J–V sweeps over time."""
-    test = _header_value(_TEST, content)
-    if test == 'Stability (Parameters)':
-        return True
-    return (
-        test == 'Stability (Tracking)' and _header_value(_ALGORITHM, content) != 'MPPT'
+    return _match(content, 'Stability (Parameters)') or _match(
+        content, 'Stability (Tracking)', mppt=False
     )
 
 
-def match_eqe(path: str, content: str) -> bool:
+def match_eqe(path: str, content: str) -> tuple | bool:
     """An external quantum efficiency spectrum, which UNITOV calls IPCE."""
-    return _header_value(_TEST, content) == 'IPCE'
+    return _match(content, 'IPCE')

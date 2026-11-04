@@ -5,6 +5,17 @@ To add your institution:
 Adapt the `match_<kind>` functions below to your files, delete those you do not
 need, and add one for each further kind you upload.
 
+Each function gets the file's path within the upload and the beginning of its
+content as text. If the file is not of its kind, it must return `False`. Otherwise it must
+return four values, in this order:
+
+    time_stamp        when the measurement started, a `datetime` with its time zone
+    sample_id         the identifier of the measured sample, a text
+    sample_reference  a URI of the sample, a text
+    data              a dict with anything else that is specific to the kind of measurement
+
+Use `None` for each value you do not know, and an empty dict `{}` for `data`.
+
 Available measurement kinds are:
     'jv',
     'dark_jv',
@@ -16,6 +27,8 @@ Available measurement kinds are:
     'impedance',
     'uv_vis',
     'image',
+    'pl_image',
+    'el_image',
     'environment_log',
     'metadata',
     'other',
@@ -25,6 +38,10 @@ Do not forget to store your files in a folder named after your institution, for 
 HZB/folder1/jv1.csv. Your functions will be called only on files in this folder structure.
 """
 
+import re
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from nomad_pv_stability_measurements.file_reading.file_reading_utils import (
     file_format_from_path,
 )
@@ -32,26 +49,76 @@ from nomad_pv_stability_measurements.file_reading.file_reading_utils import (
 #: Your institution's short name, as in the module's name and your upload folder.
 INSTITUTION = 'TEMPLATE'
 
+#: The time zone of your measurement computers, for times written without one.
+LOCAL_TIME_ZONE = ZoneInfo('Europe/Berlin')
 
-def match_jv(path: str, content: str) -> bool:
+
+def match_jv(path: str, content: str) -> tuple | bool:
     """A current–voltage (J–V) sweep.
 
-    Example: recognized by its file name, such as `sample_A/JV_001.csv`."""
-    file_name = path.rsplit('/', 1)[-1].lower()
-    return file_name.startswith('jv') and file_format_from_path(path) == 'csv'
+    Example: recognized by its file name, which also gives the start time, such as
+    `TEMPLATE/sample_A/JV_20260105_100000.csv`. The sample is named by the folder
+    the file is in, and the file's columns are separated by commas."""
+    folders_and_name = path.split('/')
+    file_name = folders_and_name[-1]
+    name_match = re.fullmatch(r'JV_(\d{8}_\d{6})\.csv', file_name, re.IGNORECASE)
+    if name_match is None:
+        return False
+
+    start = datetime.strptime(name_match.group(1), '%Y%m%d_%H%M%S')
+    time_stamp = start.replace(tzinfo=LOCAL_TIME_ZONE)
+    sample_id = folders_and_name[-2]
+    sample_reference = f'https://example.org/samples/{sample_id}'
+    data = {'separator': ','}
+    return time_stamp, sample_id, sample_reference, data
 
 
-def match_mpp_tracking(path: str, content: str) -> bool:
+def match_mpp_tracking(path: str, content: str) -> tuple | bool:
     """Maximum power point tracking.
 
-    Example: recognized by the header line that the measurement software writes,
-    such as `# MPP tracking`."""
-    first_line = content.split('\n', 1)[0]
-    return first_line.startswith('# MPP tracking')
+    Example: recognized by the header that the measurement software writes, which
+    gives the start time with its time zone, the sample and its URI. The columns of
+    the data are separated by tabs.
+
+        # MPP tracking
+        # Start: 2026-01-05T10:00:00+01:00
+        # Sample: sample_A
+        # Sample URI: https://example.org/samples/sample_A
+    """
+    lines = content.split('\n')
+    if not lines[0].startswith('# MPP tracking'):
+        return False
+
+    header = {}
+    for line in lines[1:]:
+        if line.startswith('# ') and ':' in line:
+            key, value = line[2:].split(':', 1)
+            header[key.strip()] = value.strip()
+
+    time_stamp = datetime.fromisoformat(header['Start'])
+    sample_id = header['Sample']
+    sample_reference = header['Sample URI']
+    data = {'separator': '\t'}
+    return time_stamp, sample_id, sample_reference, data
 
 
-def match_image(path: str, content: str) -> bool:
+def match_image(path: str, content: str) -> tuple | bool:
     """A photo or other image of a sample.
 
-    Example: recognized by its file format alone."""
-    return file_format_from_path(path) in ('png', 'jpg', 'tiff', 'bmp')
+    Example: recognized by its file format and a file name that gives the sample and
+    the time the image was taken, such as
+    `TEMPLATE/images/sample_A_20260105_100000.png`. An image needs nothing more for
+    reading it later, so `data` stays empty."""
+    if file_format_from_path(path) not in ('png', 'jpg', 'tiff', 'bmp'):
+        return False
+    file_name = path.rsplit('/', maxsplit=1)[-1]
+    name_match = re.fullmatch(r'(.+)_(\d{8}_\d{6})\.\w+', file_name)
+    if name_match is None:
+        return False
+
+    start = datetime.strptime(name_match.group(2), '%Y%m%d_%H%M%S')
+    time_stamp = start.replace(tzinfo=LOCAL_TIME_ZONE)
+    sample_id = name_match.group(1)
+    sample_reference = f'https://example.org/samples/{sample_id}'
+    data = {}
+    return time_stamp, sample_id, sample_reference, data
