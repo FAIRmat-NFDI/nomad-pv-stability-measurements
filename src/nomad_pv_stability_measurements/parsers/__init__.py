@@ -38,3 +38,25 @@ stability_file_parser_entry_point = StabilityFileParserEntryPoint(
     # it must not reject dots in the folders above the upload.
     mainfile_name_re=r'(?!.*\.archive\.(json|ya?ml)$)(?!.*/\.[^/]*$).*',
 )
+
+
+class StabilityUploadSummaryParserEntryPoint(ParserEntryPoint):
+    def load(self):
+        from nomad_pv_stability_measurements.parsers.summary_parser import (
+            StabilityUploadSummaryParser,
+        )
+
+        return StabilityUploadSummaryParser(**self.model_dump())
+
+
+summary_parser_entry_point = StabilityUploadSummaryParserEntryPoint(
+    name='StabilityUploadSummaryParser',
+    description="""
+    Reads the summary file of a stability upload after the entries of all its files
+    are made.
+    """,
+    # One level above the file parser, so that the entries of all files exist when
+    # the summary is normalized.
+    level=stability_file_parser_entry_point.level + 1,
+    mainfile_name_re=r'(.*/)?stability_upload\.archive\.(json|ya?ml)',
+)

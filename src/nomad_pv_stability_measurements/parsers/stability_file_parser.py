@@ -15,8 +15,10 @@ if TYPE_CHECKING:
         BoundLogger,
     )
 
+import json
 from pathlib import PurePosixPath
 
+from nomad.datamodel.context import ServerContext
 from nomad.parsing.parser import MatchingParser
 
 from nomad_pv_stability_measurements.file_reading import INSTITUTIONS
@@ -27,6 +29,7 @@ from nomad_pv_stability_measurements.file_reading.file_reading_utils import (
 from nomad_pv_stability_measurements.schema_packages.schema_package import (
     MEASUREMENT_KINDS,
     StabilityFileEntry,
+    StabilityUploadSummary,
 )
 
 #: How many bytes of a file the `match_<kind>` functions see. Enough for the headers
@@ -36,6 +39,14 @@ HEAD_SIZE = 4096
 #: The endings of NOMAD archive files, such as ELN entries and the upload summary.
 #: These are processed by NOMAD itself and not registered.
 ARCHIVE_FILE_ENDINGS = ('.archive.json', '.archive.yaml', '.archive.yml')
+
+#: The names of an upload's summary file, at the upload's root. A user may supply
+#: any of them; a summary created automatically gets the first.
+SUMMARY_FILE_NAMES = (
+    'stability_upload.archive.json',
+    'stability_upload.archive.yaml',
+    'stability_upload.archive.yml',
+)
 
 
 def is_registered(path: str) -> bool:
@@ -140,8 +151,34 @@ def register_file(path: str, content: str, logger: 'BoundLogger') -> tuple[dict,
     return values, {}
 
 
+def ensure_summary(archive: 'EntryArchive', logger: 'BoundLogger') -> None:
+    """Creates the upload's summary file, unless the upload has one, and has NOMAD
+    process it.
+
+    Only during NOMAD's processing of an upload, with a `ServerContext`. The files of
+    an upload are processed in parallel, so several may create the summary at once;
+    they write the same content, and NOMAD processes the summary again instead of
+    failing. A failure is logged as a warning and does not fail the file's entry."""
+    context = archive.m_context
+    if not isinstance(context, ServerContext):
+        return
+    if any(context.raw_path_exists(name) for name in SUMMARY_FILE_NAMES):
+        return
+
+    path = SUMMARY_FILE_NAMES[0]
+    try:
+        with context.raw_file(path, 'w') as file:
+            json.dump(
+                {'data': StabilityUploadSummary().m_to_dict(with_root_def=True)}, file
+            )
+        context.process_updated_raw_file(path, allow_modify=True)
+    except Exception as error:
+        logger.warning('could not create the upload summary', file=path, exc_info=error)
+
+
 class StabilityFileParser(MatchingParser):
-    """Makes one `StabilityFileEntry` per file, filled by `register_file`."""
+    """Makes one `StabilityFileEntry` per file, filled by `register_file`, and
+    makes sure that the upload has a summary."""
 
     def parse(
         self,
@@ -161,3 +198,5 @@ class StabilityFileParser(MatchingParser):
         # The institution-specific `data` is not stored in the file's entry.
         values, _data = register_file(path, content, logger)
         archive.data = StabilityFileEntry(**values)
+
+        ensure_summary(archive, logger)
