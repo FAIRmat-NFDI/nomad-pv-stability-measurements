@@ -29,6 +29,7 @@ from nomad_pv_stability_measurements.file_reading.file_reading_utils import (
 from nomad_pv_stability_measurements.schema_packages.schema_package import (
     MEASUREMENT_KINDS,
     StabilityFileEntry,
+    StabilitySampleIdentity,
     StabilityUploadSummary,
 )
 
@@ -133,14 +134,12 @@ def register_file(path: str, content: str, logger: 'BoundLogger') -> tuple[dict,
 
         time_stamp, sample_id, sample_reference, data = result
         values['measurement_kind'] = kind
-        found = {
-            'time_stamp': time_stamp,
-            'sample_id': sample_id,
-            'sample_reference': sample_reference,
-        }
-        values.update(
-            {name: value for name, value in found.items() if value is not None}
-        )
+        if time_stamp is not None:
+            values['time_stamp'] = time_stamp
+        if sample_id is not None or sample_reference is not None:
+            values['sample'] = StabilitySampleIdentity(
+                id=sample_id, reference=sample_reference
+            )
         return values, data
 
     logger.warning(

@@ -44,7 +44,7 @@ def test_UNITOV_file_is_registered_with_kind_sample_and_start(tmp_path):
     assert data.institution == 'UNITOV'
     assert data.measurement_kind == 'jv'
     assert data.file_format == 'txt'
-    assert data.sample_id == '3C_C1_1'
+    assert data.sample.id == '3C_C1_1'
     # 18:34:18 local time in Rome, in summer time (UTC+2).
     assert data.time_stamp == datetime(2023, 10, 19, 16, 34, 18, tzinfo=timezone.utc)
 
@@ -54,7 +54,7 @@ def test_utf8_header_text_is_kept(tmp_path):
     content = UNITOV_JV.replace('3C_C1_1', 'Zelle_µ1').encode('utf-8')
     data = parse(tmp_path, 'UNITOV/run_1/001_JV.txt', content).data
 
-    assert data.sample_id == 'Zelle_µ1'
+    assert data.sample.id == 'Zelle_µ1'
 
 
 @pytest.mark.parametrize(
@@ -74,7 +74,7 @@ def test_unrecognized_file_is_registered_as_unknown(tmp_path, path, content, log
 
     assert data.file == path
     assert data.measurement_kind == 'unknown'
-    assert data.sample_id is None
+    assert data.sample is None
     assert data.time_stamp is None
 
 

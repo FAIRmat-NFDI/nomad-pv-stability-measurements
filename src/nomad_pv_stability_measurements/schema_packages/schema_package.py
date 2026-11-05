@@ -19,7 +19,14 @@ from nomad.datamodel.metainfo.annotations import (
     ELNComponentEnum,
 )
 from nomad.datamodel.metainfo.basesections import BaseSection
-from nomad.metainfo import Datetime, MEnum, Quantity, SchemaPackage, SubSection
+from nomad.metainfo import (
+    Datetime,
+    MEnum,
+    MetainfoReferenceError,
+    Quantity,
+    SchemaPackage,
+    SubSection,
+)
 from nomad.utils import generate_entry_id
 
 configuration = config.get_plugin_entry_point(
@@ -91,6 +98,23 @@ FILE_FORMATS = [
 ]
 
 
+class StabilitySampleIdentity(ArchiveSection):
+    """Sample identity reported by the institution's reading code."""
+
+    id = Quantity(
+        type=str,
+        description='The identifier of the sample as the institution writes it.',
+    )
+
+    reference = Quantity(
+        type=str,
+        description="""
+        A URI identifying the sample: a NOMAD entry, an external database, or any
+        other resolvable identifier.
+        """,
+    )
+
+
 class StabilityFile(ArchiveSection):
     """
     One file of a stability upload, registered with what is known about it.
@@ -140,18 +164,7 @@ class StabilityFile(ArchiveSection):
         """,
     )
 
-    sample_id = Quantity(
-        type=str,
-        description='The identifier of the sample as the institution writes it.',
-    )
-
-    sample_reference = Quantity(
-        type=str,
-        description="""
-        A URI identifying the sample: a NOMAD entry, an external database, or any
-        other resolvable identifier.
-        """,
-    )
+    sample = SubSection(section_def=StabilitySampleIdentity)
 
 
 class StabilityFileEntry(StabilityFile, EntryData):
@@ -175,6 +188,20 @@ class StabilityFileReference(ArchiveSection):
     entry = Quantity(
         type=StabilityFileEntry,
         description='The entry made from the file.',
+    )
+
+
+class StabilitySample(ArchiveSection):
+    """The files of one sample of a stability upload, in the order they were measured."""
+
+    sample = SubSection(section_def=StabilitySampleIdentity)
+    files = SubSection(
+        section_def=StabilityFileReference,
+        repeats=True,
+        description="""
+        One record per file of the sample, ordered by time stamp. Files without a time
+        stamp come last.
+        """,
     )
 
 
@@ -207,13 +234,24 @@ class StabilityUploadSummary(BaseSection, EntryData):
         the files; records entered here are replaced.
         """,
     )
+    samples = SubSection(
+        section_def=StabilitySample,
+        repeats=True,
+        description="""
+        The files of the upload grouped by sample, ordered by sample identifier. The
+        files whose sample is not known are in a last group without identifier.
+        Derived from the files' entries; records entered here are replaced.
+        """,
+    )
 
     def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
         """Lists every registered file of the upload with a reference to its entry,
-        and derives `institutions` from the files' institution folders.
+        derives `institutions` from the files' institution folders, and groups the
+        files by the sample their entries name.
 
-        Only the upload's file paths are used, not the files' entries, so the result
-        does not depend on which entries are processed already."""
+        `files` and `institutions` follow from the upload's file paths alone. The
+        groups read the files' entries, which NOMAD processes before the summary; a
+        file whose entry cannot be read is in the group without sample."""
         super().normalize(archive, logger)
 
         # Imported here, because the parser module imports this module.
@@ -234,18 +272,65 @@ class StabilityUploadSummary(BaseSection, EntryData):
         )
         # An entry's id follows from its upload and its file, so the reference can be
         # written whether or not the entry exists yet.
-        self.files = [
-            StabilityFileReference(
-                file=path,
-                entry=f'../uploads/{upload_id}/archive/'
-                f'{generate_entry_id(upload_id, path)}#data',
-            )
+        references = {
+            path: f'../uploads/{upload_id}/archive/'
+            f'{generate_entry_id(upload_id, path)}#data'
             for path in paths
+        }
+        self.files = [
+            StabilityFileReference(file=path, entry=reference)
+            for path, reference in references.items()
         ]
         institutions = {institution_of(path) for path in paths}
         self.institutions = sorted(
             institution.INSTITUTION for institution in institutions if institution
         )
+
+        # Build each sample group while reading its files' entries.
+        by_sample: dict[str | None, StabilitySample] = {}
+        measurement_times = {}
+        for record in self.files:
+            try:
+                entry = record.entry
+                sample_id = entry.sample.id if entry.sample else None
+            except MetainfoReferenceError:
+                logger.warning('Could not read the entry of a file.', file=record.file)
+                entry, sample_id = None, None
+
+            # Create a group when its first file is encountered.
+            if sample_id not in by_sample:
+                by_sample[sample_id] = StabilitySample(
+                    sample=StabilitySampleIdentity(id=sample_id)
+                )
+            group = by_sample[sample_id]
+
+            # Keep the first non-empty reference, even if earlier files had none.
+            if not group.sample.reference:
+                if entry and entry.sample and entry.sample.reference:
+                    group.sample.reference = entry.sample.reference
+
+            # Give the group its own file record pointing to the same entry.
+            group.files.append(
+                StabilityFileReference(file=record.file, entry=references[record.file])
+            )
+            # Remember the measurement time so sorting does not need to read the entry.
+            measurement_times[record.file] = entry.time_stamp if entry else None
+
+        def measured_first(record):
+            time_stamp = measurement_times[record.file]
+            # Put missing times last and use the file path to break ties.
+            return (time_stamp is None, time_stamp, record.file)
+
+        # Order groups by sample identifier, with the unknown-sample group last.
+        ordered_ids = sorted(
+            by_sample, key=lambda sample_id: (sample_id is None, sample_id or '')
+        )
+        self.samples = []
+        for sample_id in ordered_ids:
+            group = by_sample[sample_id]
+            # Sort each group's files by measurement time before adding it to the summary.
+            group.files = sorted(group.files, key=measured_first)
+            self.samples.append(group)
 
 
 m_package.__init_metainfo__()

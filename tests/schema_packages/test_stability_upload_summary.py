@@ -67,7 +67,7 @@ def test_summary_references_the_entry_of_every_file(staging_upload):
 
     # Following a reference gives the entry of that file.
     jv, pdf = (record.entry for record in summary.files)
-    assert (jv.file, jv.measurement_kind, jv.sample_id) == (
+    assert (jv.file, jv.measurement_kind, jv.sample.id) == (
         'UNITOV/run_1/001_JV.txt',
         'jv',
         '3C_C1_1',
