@@ -20,6 +20,7 @@ from nomad.datamodel.metainfo.annotations import (
 )
 from nomad.datamodel.metainfo.basesections import BaseSection
 from nomad.metainfo import Datetime, MEnum, Quantity, SchemaPackage, SubSection
+from nomad.utils import generate_entry_id
 
 configuration = config.get_plugin_entry_point(
     'nomad_pv_stability_measurements.schema_packages:schema_package_entry_point'
@@ -105,6 +106,15 @@ class StabilityFile(ArchiveSection):
         a_browser=BrowserAnnotation(adaptor=BrowserAdaptors.RawFileAdaptor),
     )
 
+    institution = Quantity(
+        type=str,
+        description="""
+        Short name of the institution whose folder of the upload the file is in. Its
+        reading code determines the other values. Empty if the file is in no
+        institution's folder.
+        """,
+    )
+
     measurement_kind = Quantity(
         type=MEnum(*MEASUREMENT_KINDS),
         default='unknown',
@@ -148,17 +158,39 @@ class StabilityFileEntry(StabilityFile, EntryData):
     """The entry made from one file of a stability upload."""
 
 
+class StabilityFileReference(ArchiveSection):
+    """
+    One file of a stability upload in its summary: the file's path and a reference
+    to the file's own entry, which holds what is known about it.
+
+    The reference is resolved only when it is followed, so it may be written before
+    the file's entry exists.
+    """
+
+    file = Quantity(
+        type=str,
+        description='The path of the file, relative to the upload.',
+        a_browser=BrowserAnnotation(adaptor=BrowserAdaptors.RawFileAdaptor),
+    )
+    entry = Quantity(
+        type=StabilityFileEntry,
+        description='The entry made from the file.',
+    )
+
+
 class StabilityUploadSummary(BaseSection, EntryData):
     """
-    All files of one stability upload, with the institution that measured them and
+    All files of one stability upload, with the institutions that measured them and
     the proposal under which they were measured.
     """
 
-    institution = Quantity(
+    institutions = Quantity(
         type=str,
+        shape=['*'],
         description="""
-        Short name of the institution that measured the files of this upload. Derived
-        from the files; a value entered here is replaced.
+        Short names of the institutions that measured the files of this upload, one
+        per institution folder. Derived from the files; values entered here are
+        replaced.
         """,
     )
     proposal = Quantity(
@@ -168,13 +200,52 @@ class StabilityUploadSummary(BaseSection, EntryData):
     )
 
     files = SubSection(
-        section_def=StabilityFile,
+        section_def=StabilityFileReference,
         repeats=True,
         description="""
-        One record per file of the upload. Derived from the files; records entered
-        here are replaced.
+        One record per file of the upload, referencing the file's entry. Derived from
+        the files; records entered here are replaced.
         """,
     )
+
+    def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
+        """Lists every registered file of the upload with a reference to its entry,
+        and derives `institutions` from the files' institution folders.
+
+        Only the upload's file paths are used, not the files' entries, so the result
+        does not depend on which entries are processed already."""
+        super().normalize(archive, logger)
+
+        # Imported here, because the parser module imports this module.
+        from nomad_pv_stability_measurements.parsers.stability_file_parser import (
+            institution_of,
+            is_registered,
+        )
+
+        upload_files = getattr(archive.m_context, 'upload_files', None)
+        upload_id = archive.metadata.upload_id if archive.metadata else None
+        if upload_files is None or upload_id is None:
+            return
+
+        paths = sorted(
+            info.path
+            for info in upload_files.raw_listdir(recursive=True, files_only=True)
+            if is_registered(info.path)
+        )
+        # An entry's id follows from its upload and its file, so the reference can be
+        # written whether or not the entry exists yet.
+        self.files = [
+            StabilityFileReference(
+                file=path,
+                entry=f'../uploads/{upload_id}/archive/'
+                f'{generate_entry_id(upload_id, path)}#data',
+            )
+            for path in paths
+        ]
+        institutions = {institution_of(path) for path in paths}
+        self.institutions = sorted(
+            institution.INSTITUTION for institution in institutions if institution
+        )
 
 
 m_package.__init_metainfo__()

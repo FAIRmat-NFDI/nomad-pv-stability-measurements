@@ -5,12 +5,17 @@ from typing import (
 )
 
 if TYPE_CHECKING:
+    from types import ModuleType
+    from typing import BinaryIO
+
     from nomad.datamodel.datamodel import (
         EntryArchive,
     )
     from structlog.stdlib import (
         BoundLogger,
     )
+
+from pathlib import PurePosixPath
 
 from nomad.parsing.parser import MatchingParser
 
@@ -24,34 +29,58 @@ from nomad_pv_stability_measurements.schema_packages.schema_package import (
     StabilityFileEntry,
 )
 
-#: How many characters of a file the `match_<kind>` functions see. Enough for the
-#: headers of all known formats; UNITOV's `Algorithm` line lies up to 556 characters
-#: in.
+#: How many bytes of a file the `match_<kind>` functions see. Enough for the headers
+#: of all known formats; UNITOV's `Algorithm` line lies up to 556 bytes in.
 HEAD_SIZE = 4096
 
+#: The endings of NOMAD archive files, such as ELN entries and the upload summary.
+#: These are processed by NOMAD itself and not registered.
+ARCHIVE_FILE_ENDINGS = ('.archive.json', '.archive.yaml', '.archive.yml')
 
-def read_head(file_path: str) -> str:
-    """The first `HEAD_SIZE` characters of the file at `file_path` as text.
+
+def is_registered(path: str) -> bool:
+    """`True` if the file at `path`, a path within the upload, is registered: all
+    files except NOMAD archive files, hidden files, files in hidden folders, and
+    files whose name starts with `~`, which NOMAD never processes."""
+    names = PurePosixPath(path).parts
+    if any(name.startswith('.') for name in names) or names[-1].startswith('~'):
+        return False
+    return not path.endswith(ARCHIVE_FILE_ENDINGS)
+
+
+def read_head(file: 'BinaryIO') -> str:
+    """The first `HEAD_SIZE` bytes of `file`, opened in binary mode, as text.
 
     Decoded as UTF-8: before parsing, NOMAD rewrites text files that it recognizes as
     Latin-1 in UTF-8. Bytes that are not UTF-8, as in binary files, become `�`
     instead of an error, so such a file gives text that no `match_<kind>` function
     recognizes."""
-    with open(file_path, encoding='utf-8', errors='replace') as file:
-        return file.read(HEAD_SIZE)
+    return file.read(HEAD_SIZE).decode('utf-8', errors='replace')
 
 
-def register_file(
-    path: str, content: str, logger: 'BoundLogger'
-) -> tuple[dict, str | None, dict]:
+def institution_of(path: str) -> 'ModuleType | None':
+    """The first module in `INSTITUTIONS` whose institution folder the file at
+    `path`, a path within the upload, is in, or `None`."""
+    return next(
+        (
+            module
+            for module in INSTITUTIONS
+            if is_in_institution_folder(path, module.INSTITUTION)
+        ),
+        None,
+    )
+
+
+def register_file(path: str, content: str, logger: 'BoundLogger') -> tuple[dict, dict]:
     """What is known about the file at `path`, a path within the upload, whose
     beginning is `content`.
 
-    Returns three values:
+    Returns two values:
 
     - the values of the `StabilityFile` quantities, without those nobody knows;
-    - the `INSTITUTION` whose folder the file is in, or `None`;
     - the `data` dict that the institution's `match_<kind>` function returned.
+
+    The institution is given by `institution_of`.
 
     The institution's `match_<kind>` functions are asked in the order of
     `MEASUREMENT_KINDS`, and the first that recognizes the file, by not returning
@@ -64,22 +93,16 @@ def register_file(
     """
     values = {'file': path, 'file_format': file_format_from_path(path)}
 
-    institution = next(
-        (
-            module
-            for module in INSTITUTIONS
-            if is_in_institution_folder(path, module.INSTITUTION)
-        ),
-        None,
-    )
+    institution = institution_of(path)
     if institution is None:
         logger.error(
             'file is in no institution folder',
             file=path,
             institutions=[module.INSTITUTION for module in INSTITUTIONS],
         )
-        return values, None, {}
+        return values, {}
 
+    values['institution'] = institution.INSTITUTION
     for kind in MEASUREMENT_KINDS:
         match = getattr(institution, f'match_{kind}', None)
         if match is None:
@@ -107,14 +130,14 @@ def register_file(
         values.update(
             {name: value for name, value in found.items() if value is not None}
         )
-        return values, institution.INSTITUTION, data
+        return values, data
 
     logger.warning(
         'file kind not recognized',
         file=path,
         institution=institution.INSTITUTION,
     )
-    return values, institution.INSTITUTION, {}
+    return values, {}
 
 
 class StabilityFileParser(MatchingParser):
@@ -133,7 +156,8 @@ class StabilityFileParser(MatchingParser):
         if archive.metadata is not None and archive.metadata.mainfile:
             path = archive.metadata.mainfile
 
-        # The institution and the institution-specific `data` are not stored in
-        # the file's entry.
-        values, _institution, _data = register_file(path, read_head(mainfile), logger)
+        with open(mainfile, 'rb') as file:
+            content = read_head(file)
+        # The institution-specific `data` is not stored in the file's entry.
+        values, _data = register_file(path, content, logger)
         archive.data = StabilityFileEntry(**values)

@@ -41,6 +41,7 @@ def test_UNITOV_file_is_registered_with_kind_sample_and_start(tmp_path):
     assert not [log for log in logs if log['log_level'] in ('warning', 'error')]
 
     assert data.file == 'UNITOV/run_1/001_JV.txt'
+    assert data.institution == 'UNITOV'
     assert data.measurement_kind == 'jv'
     assert data.file_format == 'txt'
     assert data.sample_id == '3C_C1_1'
