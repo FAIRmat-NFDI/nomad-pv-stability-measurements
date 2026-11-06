@@ -136,9 +136,10 @@ class StabilityFile(ArchiveSection):
     institution = Quantity(
         type=str,
         description="""
-        Short name of the institution whose folder of the upload the file is in. Its
-        reading code determines the other values. Empty if the file is in no
-        institution's folder.
+        Short name of the institution whose folder of the upload the file is in, or,
+        for a file in no institution's folder, the institution of the uploader's
+        email domain. Its reading code determines the other values. Empty if neither
+        names an institution.
         """,
     )
 
@@ -232,7 +233,8 @@ class StabilityUploadSummary(PlotSection, BaseSection, EntryData):
         shape=['*'],
         description="""
         Short names of the institutions that measured the files of this upload, one
-        per institution folder. Derived from the files; values entered here are
+        per institution folder, and that of the uploader's email domain if files lie
+        in no institution's folder. Derived from the files; values entered here are
         replaced.
         """,
     )
@@ -262,10 +264,12 @@ class StabilityUploadSummary(PlotSection, BaseSection, EntryData):
 
     def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
         """Lists every registered file of the upload with a reference to its entry,
-        derives `institutions` from the files' institution folders, and groups the
-        files by the sample their entries name.
+        derives `institutions` from the files' institution folders or else the
+        uploader's email domain, and groups the files by the sample their entries
+        name.
 
-        `files` and `institutions` follow from the upload's file paths alone. The
+        `files` and `institutions` follow from the upload's file paths and its
+        uploader alone. The
         groups read the files' entries, which NOMAD processes before the summary; a
         file whose entry cannot be read is in the group without sample."""
         super().normalize(archive, logger)
@@ -274,6 +278,7 @@ class StabilityUploadSummary(PlotSection, BaseSection, EntryData):
         from nomad_pv_stability_measurements.parsers.stability_file_parser import (
             institution_of,
             is_registered,
+            uploader_email,
         )
 
         upload_files = getattr(archive.m_context, 'upload_files', None)
@@ -297,7 +302,8 @@ class StabilityUploadSummary(PlotSection, BaseSection, EntryData):
             StabilityFileReference(file=path, entry=reference)
             for path, reference in references.items()
         ]
-        institutions = {institution_of(path) for path in paths}
+        email = uploader_email(archive)
+        institutions = {institution_of(path, email) for path in paths}
         self.institutions = sorted(
             institution.INSTITUTION for institution in institutions if institution
         )

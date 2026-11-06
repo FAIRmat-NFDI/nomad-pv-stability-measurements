@@ -1,7 +1,7 @@
 import re
 
 from nomad import utils
-from nomad.datamodel import EntryArchive, EntryMetadata
+from nomad.datamodel import EntryArchive, EntryMetadata, User
 
 from nomad_pv_stability_measurements.parsers import (
     stability_file_parser_entry_point,
@@ -31,7 +31,9 @@ def normalize(upload, files: dict[str, str], summary: StabilityUploadSummary):
 
     archive = EntryArchive(
         metadata=EntryMetadata(
-            upload_id=upload.upload_id, mainfile='stability_upload.archive.json'
+            upload_id=upload.upload_id,
+            mainfile='stability_upload.archive.json',
+            main_author=upload.main_author,
         ),
         data=summary,
         m_context=upload.context,
@@ -93,3 +95,18 @@ def test_summary_names_every_institution_of_the_upload(staging_upload):
         'UNITOV',
         None,
     ]
+
+
+def test_summary_names_the_uploaders_institution_for_files_in_no_folder(
+    staging_upload,
+):
+    staging_upload.main_author = User(email='researcher@uniroma2.it')
+    summary = StabilityUploadSummary()
+    normalize(
+        staging_upload,
+        {'HZB/jv_001.csv': 'V,J\n', 'results/001_JV.txt': UNITOV_JV},
+        summary,
+    )
+
+    assert summary.institutions == ['HZB', 'UNITOV']
+    assert [record.entry.institution for record in summary.files] == ['HZB', 'UNITOV']

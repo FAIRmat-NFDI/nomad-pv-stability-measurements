@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 import pytest
 from nomad import utils
-from nomad.datamodel import EntryArchive, EntryMetadata
+from nomad.datamodel import EntryArchive, EntryMetadata, User
 from structlog.testing import capture_logs
 
 from nomad_pv_stability_measurements.file_reading import file_reading_UNITOV
@@ -25,12 +25,18 @@ UNITOV_JV = (
 )
 
 
-def parse(tmp_path, path: str, content: bytes) -> EntryArchive:
-    """Parses `content` stored at `path` within an upload in `tmp_path`."""
+def parse(
+    tmp_path, path: str, content: bytes, email: str | None = None
+) -> EntryArchive:
+    """Parses `content` stored at `path` within an upload in `tmp_path`, uploaded by
+    a user with the address `email`, if given."""
     file_path = tmp_path / path
     file_path.parent.mkdir(parents=True, exist_ok=True)
     file_path.write_bytes(content)
-    archive = EntryArchive(metadata=EntryMetadata(mainfile=path))
+    main_author = User(email=email) if email else None
+    archive = EntryArchive(
+        metadata=EntryMetadata(mainfile=path, main_author=main_author)
+    )
     StabilityFileParser().parse(str(file_path), archive, utils.get_logger(__name__))
     return archive
 
@@ -111,6 +117,28 @@ def test_unrecognized_file_is_registered_as_unknown(tmp_path, path, content, log
     assert data.measurement_kind == 'unknown'
     assert data.sample is None
     assert data.time_stamp is None
+
+
+@pytest.mark.parametrize(
+    'path, email, institution, kind',
+    [
+        # In no institution's folder: the uploader's email domain decides.
+        ('results/001_JV.txt', 'researcher@uniroma2.it', 'UNITOV', 'jv'),
+        ('results/001_JV.txt', 'researcher@Chem.Uniroma2.it', 'UNITOV', 'jv'),
+        # The folder decides over the email domain.
+        ('UNITOV/001_JV.txt', 'researcher@helmholtz-berlin.de', 'UNITOV', 'jv'),
+        # Domains of no institution, also those that only end like one.
+        ('results/001_JV.txt', 'researcher@gmail.com', None, 'unknown'),
+        ('results/001_JV.txt', 'researcher@notuniroma2.it', None, 'unknown'),
+    ],
+)
+def test_file_in_no_institution_folder_belongs_to_the_uploaders_institution(
+    tmp_path, path, email, institution, kind
+):
+    data = parse(tmp_path, path, UNITOV_JV.encode(), email).data
+
+    assert data.institution == institution
+    assert data.measurement_kind == kind
 
 
 @pytest.mark.parametrize(

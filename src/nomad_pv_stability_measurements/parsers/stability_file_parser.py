@@ -87,10 +87,14 @@ def read_tail(file: 'BinaryIO', size: int = TAIL_SIZE) -> str:
     return file.read().decode('utf-8', errors='replace')
 
 
-def institution_of(path: str) -> 'ModuleType | None':
-    """The first module in `INSTITUTIONS` whose institution folder the file at
-    `path`, a path within the upload, is in, or `None`."""
-    return next(
+def institution_of(path: str, email: str | None = None) -> 'ModuleType | None':
+    """The institution of the file at `path`, a path within the upload: the first
+    module in `INSTITUTIONS` whose institution folder the file is in.
+
+    For a file in no institution's folder, the first module whose `EMAIL_DOMAINS`
+    hold the domain of `email`, the uploader's email address; a subdomain counts, so
+    `chem.uni.edu` belongs to `uni.edu`. `None` if neither decides."""
+    folder_institution = next(
         (
             module
             for module in INSTITUTIONS
@@ -98,20 +102,49 @@ def institution_of(path: str) -> 'ModuleType | None':
         ),
         None,
     )
+    if folder_institution is not None or not email or '@' not in email:
+        return folder_institution
+
+    domain = email.rsplit('@', 1)[1].lower()
+    return next(
+        (
+            module
+            for module in INSTITUTIONS
+            for institution_domain in getattr(module, 'EMAIL_DOMAINS', ())
+            if domain == institution_domain.lower()
+            or domain.endswith('.' + institution_domain.lower())
+        ),
+        None,
+    )
+
+
+def uploader_email(archive: 'EntryArchive') -> str | None:
+    """The email address of the upload's main author, as NOMAD's user management
+    knows it, or `None`, as when parsing outside of NOMAD's processing."""
+    try:
+        return archive.metadata.main_author.email
+    except Exception:
+        return None
 
 
 def register_file(
-    path: str, content: str, tail: str, logger: 'BoundLogger'
+    path: str,
+    content: str,
+    tail: str,
+    logger: 'BoundLogger',
+    email: str | None = None,
 ) -> tuple[dict, dict]:
     """What is known about the file at `path`, a path within the upload, whose
-    beginning is `content` and whose end is `tail`.
+    beginning is `content` and whose end is `tail`, uploaded by the user with the
+    address `email`.
 
     Returns two values:
 
     - the values of the `StabilityFile` quantities, without those nobody knows;
     - the `data` dict that the institution's `match_<kind>` function returned.
 
-    The institution is given by `institution_of`.
+    The institution is given by `institution_of`: by the file's folder, or else by
+    the domain of `email`, which is logged.
 
     The institution's `match_<kind>` functions are asked in the order of
     `MEASUREMENT_KINDS`, and the first that recognizes the file, by not returning
@@ -119,20 +152,28 @@ def register_file(
     recognizing the file. A measurement whose function gives no end time ends when it
     starts.
 
-    A file that is in no institution's folder is of kind `unknown` and logged as an
-    error, because no institution's code can read it. A file of an institution that
+    A file that belongs to no institution, by folder or email, is of kind `unknown`
+    and logged as an error, because no institution's code can read it. A file of an institution that
     no function recognizes is of kind `unknown` and logged as a warning.
     """
     values = {'file': path, 'file_format': file_format_from_path(path)}
 
-    institution = institution_of(path)
+    institution = institution_of(path, email)
     if institution is None:
         logger.error(
-            'file is in no institution folder',
+            "file is in no institution folder, and the uploader's email domain "
+            'belongs to no institution',
             file=path,
             institutions=[module.INSTITUTION for module in INSTITUTIONS],
         )
         return values, {}
+    if institution is not institution_of(path):
+        logger.info(
+            "file is in no institution folder; institution taken from the uploader's "
+            'email domain',
+            file=path,
+            institution=institution.INSTITUTION,
+        )
 
     values['institution'] = institution.INSTITUTION
     for kind in MEASUREMENT_KINDS:
@@ -217,14 +258,15 @@ class StabilityFileParser(MatchingParser):
             path = archive.metadata.mainfile
 
         # How much of the file the institution's functions see, as its module sets.
-        institution = institution_of(path)
+        email = uploader_email(archive)
+        institution = institution_of(path, email)
         head_size = getattr(institution, 'HEAD_SIZE', HEAD_SIZE)
         tail_size = getattr(institution, 'TAIL_SIZE', TAIL_SIZE)
         with open(mainfile, 'rb') as file:
             content = read_head(file, head_size)
             tail = read_tail(file, tail_size)
         # The institution-specific `data` is not stored in the file's entry.
-        values, _data = register_file(path, content, tail, logger)
+        values, _data = register_file(path, content, tail, logger, email)
         archive.data = StabilityFileEntry(**values)
 
         ensure_summary(archive, logger)

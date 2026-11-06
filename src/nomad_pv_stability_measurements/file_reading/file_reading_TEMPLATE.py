@@ -40,7 +40,9 @@ Available measurement kinds are:
     'unknown',
 
 Do not forget to store your files in a folder named after your institution, for example
-HZB/folder1/jv1.csv. Your functions will be called only on files in this folder structure.
+HZB/folder1/jv1.csv. Your functions will be called only on files in this folder structure,
+and on files in no institution's folder that someone with an address of your
+`EMAIL_DOMAINS` uploads.
 """
 
 import re
@@ -53,6 +55,10 @@ from nomad_pv_stability_measurements.file_reading.file_reading_utils import (
 
 #: Your institution's short name, as in the module's name and your upload folder.
 INSTITUTION = 'TEMPLATE'
+
+#: Email domains of your institution, such as 'uni.edu', with their subdomains. A file
+#: in no institution folder belongs to the institution of its uploader's email domain.
+EMAIL_DOMAINS: tuple[str, ...] = ()
 
 #: The time zone of your measurement computers, for times written without one.
 LOCAL_TIME_ZONE = ZoneInfo('Europe/Berlin')

@@ -5,7 +5,8 @@ One module `file_reading_<INSTITUTION>.py` per institution, with the interface o
 `file_reading_utils.py`.
 
 A file belongs to an institution if it lies in a folder of the upload named like
-the institution's `INSTITUTION`. `INSTITUTIONS` lists the institutions that are
+the institution's `INSTITUTION`; a file in no such folder belongs to the institution
+whose `EMAIL_DOMAINS` hold the domain of the uploader's email address. `INSTITUTIONS` lists the institutions that are
 looked for.
 """
 

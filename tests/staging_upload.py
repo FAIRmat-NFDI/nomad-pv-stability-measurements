@@ -16,9 +16,10 @@ class StagingUpload:
     """A NOMAD staging upload with its `ServerContext`, as during processing.
 
     `processed` lists the files that parsers ask NOMAD to process during
-    processing."""
+    processing. `main_author` is the uploader, a NOMAD `User`, or `None`."""
 
     upload_id = 'test_upload'
+    main_author = None
 
     def __init__(self, source_dir):
         self.source_dir = source_dir
@@ -47,7 +48,9 @@ class StagingUpload:
     def parse(self, path: str) -> EntryArchive:
         """Makes and stores the entry of the file at `path` with the file parser."""
         archive = EntryArchive(
-            metadata=EntryMetadata(upload_id=self.upload_id, mainfile=path),
+            metadata=EntryMetadata(
+                upload_id=self.upload_id, mainfile=path, main_author=self.main_author
+            ),
             m_context=self.context,
         )
         StabilityFileParser().parse(

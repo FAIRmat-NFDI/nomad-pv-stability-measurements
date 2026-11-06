@@ -27,6 +27,9 @@ from zoneinfo import ZoneInfo
 
 INSTITUTION = 'UNITOV'
 
+#: Email domains of the University of Rome Tor Vergata, with their subdomains.
+EMAIL_DOMAINS = ('uniroma2.it',)
+
 #: Bytes from the beginning given as `content`: the header, whose `Algorithm` line
 #: lies up to 556 bytes in.
 HEAD_SIZE = 4096
