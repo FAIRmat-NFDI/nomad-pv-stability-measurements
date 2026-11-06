@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     )
 
 import json
+import os
 from pathlib import PurePosixPath
 
 from nomad.datamodel.context import ServerContext
@@ -33,9 +34,13 @@ from nomad_pv_stability_measurements.schema_packages.schema_package import (
     StabilityUploadSummary,
 )
 
-#: How many bytes of a file the `match_<kind>` functions see. Enough for the headers
-#: of all known formats; UNITOV's `Algorithm` line lies up to 556 bytes in.
+#: How many bytes of the beginning of a file the `match_<kind>` functions see, for
+#: an institution whose module sets no `HEAD_SIZE` of its own.
 HEAD_SIZE = 4096
+
+#: How many bytes of the end of a file the `match_<kind>` functions see, for an
+#: institution whose module sets no `TAIL_SIZE` of its own.
+TAIL_SIZE = 4096
 
 #: The endings of NOMAD archive files, such as ELN entries and the upload summary.
 #: These are processed by NOMAD itself and not registered.
@@ -60,14 +65,26 @@ def is_registered(path: str) -> bool:
     return not path.endswith(ARCHIVE_FILE_ENDINGS)
 
 
-def read_head(file: 'BinaryIO') -> str:
-    """The first `HEAD_SIZE` bytes of `file`, opened in binary mode, as text.
+def read_head(file: 'BinaryIO', size: int = HEAD_SIZE) -> str:
+    """The first `size` bytes of `file`, opened in binary mode, as text.
 
     Decoded as UTF-8: before parsing, NOMAD rewrites text files that it recognizes as
     Latin-1 in UTF-8. Bytes that are not UTF-8, as in binary files, become `�`
     instead of an error, so such a file gives text that no `match_<kind>` function
     recognizes."""
-    return file.read(HEAD_SIZE).decode('utf-8', errors='replace')
+    return file.read(size).decode('utf-8', errors='replace')
+
+
+def read_tail(file: 'BinaryIO', size: int = TAIL_SIZE) -> str:
+    """The last `size` bytes of `file`, opened in binary mode, as text, decoded like
+    `read_head`; empty for `size` 0. If head and tail together are longer than the
+    file, they overlap; for a file shorter than `size`, the tail is the whole file.
+    The tail may begin within a line."""
+    if size == 0:
+        return ''
+    file.seek(0, os.SEEK_END)
+    file.seek(max(0, file.tell() - size))
+    return file.read().decode('utf-8', errors='replace')
 
 
 def institution_of(path: str) -> 'ModuleType | None':
@@ -83,9 +100,11 @@ def institution_of(path: str) -> 'ModuleType | None':
     )
 
 
-def register_file(path: str, content: str, logger: 'BoundLogger') -> tuple[dict, dict]:
+def register_file(
+    path: str, content: str, tail: str, logger: 'BoundLogger'
+) -> tuple[dict, dict]:
     """What is known about the file at `path`, a path within the upload, whose
-    beginning is `content`.
+    beginning is `content` and whose end is `tail`.
 
     Returns two values:
 
@@ -97,7 +116,8 @@ def register_file(path: str, content: str, logger: 'BoundLogger') -> tuple[dict,
     The institution's `match_<kind>` functions are asked in the order of
     `MEASUREMENT_KINDS`, and the first that recognizes the file, by not returning
     `False`, decides. A function that fails is logged as a warning and treated as not
-    recognizing the file.
+    recognizing the file. A measurement whose function gives no end time ends when it
+    starts.
 
     A file that is in no institution's folder is of kind `unknown` and logged as an
     error, because no institution's code can read it. A file of an institution that
@@ -120,7 +140,7 @@ def register_file(path: str, content: str, logger: 'BoundLogger') -> tuple[dict,
         if match is None:
             continue
         try:
-            result = match(path, content)
+            result = match(path, content, tail)
         except Exception as error:
             logger.warning(
                 'match function failed',
@@ -132,10 +152,14 @@ def register_file(path: str, content: str, logger: 'BoundLogger') -> tuple[dict,
         if result is False:
             continue
 
-        time_stamp, sample_id, sample_reference, data = result
+        time_stamp, end_time, sample_id, sample_reference, data = result
         values['measurement_kind'] = kind
         if time_stamp is not None:
             values['time_stamp'] = time_stamp
+        if end_time is None:
+            end_time = time_stamp
+        if end_time is not None:
+            values['end_time'] = end_time
         if sample_id is not None or sample_reference is not None:
             values['sample'] = StabilitySampleIdentity(
                 id=sample_id, reference=sample_reference
@@ -192,10 +216,15 @@ class StabilityFileParser(MatchingParser):
         if archive.metadata is not None and archive.metadata.mainfile:
             path = archive.metadata.mainfile
 
+        # How much of the file the institution's functions see, as its module sets.
+        institution = institution_of(path)
+        head_size = getattr(institution, 'HEAD_SIZE', HEAD_SIZE)
+        tail_size = getattr(institution, 'TAIL_SIZE', TAIL_SIZE)
         with open(mainfile, 'rb') as file:
-            content = read_head(file)
+            content = read_head(file, head_size)
+            tail = read_tail(file, tail_size)
         # The institution-specific `data` is not stored in the file's entry.
-        values, _data = register_file(path, content, logger)
+        values, _data = register_file(path, content, tail, logger)
         archive.data = StabilityFileEntry(**values)
 
         ensure_summary(archive, logger)

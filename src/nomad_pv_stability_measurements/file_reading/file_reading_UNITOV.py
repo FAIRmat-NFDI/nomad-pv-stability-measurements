@@ -14,24 +14,42 @@ The header also gives the measured sample in `Device`, and the start of the
 measurement in `Date` (`2023-10-19`) and `Time` (`18:34:18`). These times are the
 local time of the stations in Rome.
 
+The two series, `Stability (Tracking)` and `Stability (Parameters)`, have one row per
+sample after the header, the first column `Time (Hours)` counting from the start. The
+last row's time gives the end of the measurement. The other files have no end time.
+
 Other files, such as the PDF plots exported next to Dark JV and IPCE measurements,
 are of kind `unknown`.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 INSTITUTION = 'UNITOV'
 
+#: Bytes from the beginning given as `content`: the header, whose `Algorithm` line
+#: lies up to 556 bytes in.
+HEAD_SIZE = 4096
+
+#: Bytes from the end given as `tail`: enough for the last data row of a series.
+TAIL_SIZE = 4096
+
 _LOCAL_TIME_ZONE = ZoneInfo('Europe/Rome')
 
 
-def _match(content: str, test: str, mppt: bool | None = None) -> tuple | bool:
+def _match(
+    content: str,
+    test: str,
+    mppt: bool | None = None,
+    tail: str | None = None,
+) -> tuple | bool:
     """What every `match_<kind>` function returns: `False` unless `content` is a
-    UNITOV text file whose `Test` line is `test`, otherwise its start time and sample.
+    UNITOV text file whose `Test` line is `test`, otherwise its start and end time and
+    sample.
 
     `mppt` also checks the `Algorithm` line: `True` if it must be `MPPT`, `False` if
-    it must not, `None` to ignore it."""
+    it must not, `None` to ignore it. `tail`, the end of a series file, gives the end
+    time; without it, the end time is not known."""
     if not content.startswith('## Header ##'):
         return False
 
@@ -50,35 +68,52 @@ def _match(content: str, test: str, mppt: bool | None = None) -> tuple | bool:
     if header.get('Date') and header.get('Time'):
         start = datetime.fromisoformat(f'{header["Date"]}T{header["Time"]}')
         time_stamp = start.replace(tzinfo=_LOCAL_TIME_ZONE)
+    end_time = None
+    if time_stamp is not None and tail is not None:
+        hours = _hours_of_last_row(tail)
+        if hours is not None:
+            end_time = time_stamp + timedelta(hours=hours)
     sample_id = header.get('Device') or None
     sample_reference = None
     data = {}
-    return time_stamp, sample_id, sample_reference, data
+    return time_stamp, end_time, sample_id, sample_reference, data
 
 
-def match_jv(path: str, content: str) -> tuple | bool:
+def _hours_of_last_row(tail: str) -> float | None:
+    """The `Time (Hours)` of the last data row of a series file, from the file's end
+    `tail`, or `None` if the last line is not a data row."""
+    lines = [line for line in tail.splitlines() if line.strip()]
+    if not lines:
+        return None
+    try:
+        return float(lines[-1].split('\t')[0])
+    except ValueError:
+        return None
+
+
+def match_jv(path: str, content: str, tail: str) -> tuple | bool:
     """A J–V sweep under light during a stability test."""
     return _match(content, 'Stability (JV)')
 
 
-def match_dark_jv(path: str, content: str) -> tuple | bool:
+def match_dark_jv(path: str, content: str, tail: str) -> tuple | bool:
     """A J–V sweep in the dark."""
     return _match(content, 'Dark JV')
 
 
-def match_mpp_tracking(path: str, content: str) -> tuple | bool:
+def match_mpp_tracking(path: str, content: str, tail: str) -> tuple | bool:
     """The series of a stability test that tracks the maximum power point."""
-    return _match(content, 'Stability (Tracking)', mppt=True)
+    return _match(content, 'Stability (Tracking)', mppt=True, tail=tail)
 
 
-def match_stability_series(path: str, content: str) -> tuple | bool:
+def match_stability_series(path: str, content: str, tail: str) -> tuple | bool:
     """The other series of a stability test: one held at a fixed voltage, and the
     figures of merit of its J–V sweeps over time."""
-    return _match(content, 'Stability (Parameters)') or _match(
-        content, 'Stability (Tracking)', mppt=False
+    return _match(content, 'Stability (Parameters)', tail=tail) or _match(
+        content, 'Stability (Tracking)', mppt=False, tail=tail
     )
 
 
-def match_eqe(path: str, content: str) -> tuple | bool:
+def match_eqe(path: str, content: str, tail: str) -> tuple | bool:
     """An external quantum efficiency spectrum, which UNITOV calls IPCE."""
     return _match(content, 'IPCE')

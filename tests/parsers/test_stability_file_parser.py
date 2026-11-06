@@ -6,6 +6,7 @@ from nomad import utils
 from nomad.datamodel import EntryArchive, EntryMetadata
 from structlog.testing import capture_logs
 
+from nomad_pv_stability_measurements.file_reading import file_reading_UNITOV
 from nomad_pv_stability_measurements.parsers import (
     stability_file_parser_entry_point,
 )
@@ -47,6 +48,40 @@ def test_UNITOV_file_is_registered_with_kind_sample_and_start(tmp_path):
     assert data.sample.id == '3C_C1_1'
     # 18:34:18 local time in Rome, in summer time (UTC+2).
     assert data.time_stamp == datetime(2023, 10, 19, 16, 34, 18, tzinfo=timezone.utc)
+
+
+#: A UNITOV MPP tracking file of two hours, started at 18:34:18 in Rome. Long enough
+#: that its last row lies far beyond the beginning of the file.
+UNITOV_LONG_TRACKING = (
+    UNITOV_JV.replace('Stability (JV)', 'Stability (Tracking)')
+    + 'Algorithm\tMPPT\t\r\n'
+    + 'Time (Hours)\tVoltage (V)\tCurrent Density (mA/cm2)\tPower (mW/cm2)\r\n'
+    + ''.join(f'{hour / 1000}\t0.41\t5.29\t2.17\r\n' for hour in range(1, 2001))
+)
+
+
+def test_UNITOV_file_ends_at_its_last_row_or_else_when_it_starts(tmp_path):
+    assert len(UNITOV_LONG_TRACKING) > (
+        file_reading_UNITOV.HEAD_SIZE + file_reading_UNITOV.TAIL_SIZE
+    )
+
+    tracking_path = 'UNITOV/run_1/000_Tracking.txt'
+    tracked = parse(tmp_path, tracking_path, UNITOV_LONG_TRACKING.encode()).data
+    swept = parse(tmp_path, 'UNITOV/run_1/001_JV.txt', UNITOV_JV.encode()).data
+
+    assert tracked.measurement_kind == 'mpp_tracking'
+    # Two hours after the start at 18:34:18 in Rome.
+    assert tracked.end_time == datetime(2023, 10, 19, 18, 34, 18, tzinfo=timezone.utc)
+    assert swept.end_time == swept.time_stamp
+
+
+def test_institution_without_tail_gets_no_end_from_the_last_row(tmp_path, monkeypatch):
+    monkeypatch.setattr(file_reading_UNITOV, 'TAIL_SIZE', 0)
+    tracking_path = 'UNITOV/run_1/000_Tracking.txt'
+    tracked = parse(tmp_path, tracking_path, UNITOV_LONG_TRACKING.encode()).data
+
+    assert tracked.measurement_kind == 'mpp_tracking'
+    assert tracked.end_time == tracked.time_stamp
 
 
 def test_utf8_header_text_is_kept(tmp_path):

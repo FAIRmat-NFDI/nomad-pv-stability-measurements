@@ -10,6 +10,8 @@ if TYPE_CHECKING:
         BoundLogger,
     )
 
+from pathlib import PurePosixPath
+
 from nomad.config import config
 from nomad.datamodel.data import ArchiveSection, EntryData, Schema
 from nomad.datamodel.metainfo.annotations import (
@@ -19,6 +21,7 @@ from nomad.datamodel.metainfo.annotations import (
     ELNComponentEnum,
 )
 from nomad.datamodel.metainfo.basesections import BaseSection
+from nomad.datamodel.metainfo.plot import PlotlyFigure, PlotSection
 from nomad.metainfo import (
     Datetime,
     MEnum,
@@ -164,6 +167,16 @@ class StabilityFile(ArchiveSection):
         """,
     )
 
+    end_time = Quantity(
+        type=Datetime,
+        description="""
+        When the measurement in this file finished, as an absolute time, with the
+        same time zone rule as `time_stamp`. Equal to `time_stamp` if the
+        institution's reading code gives no end, as for a measurement that takes
+        only seconds.
+        """,
+    )
+
     sample = SubSection(section_def=StabilitySampleIdentity)
 
 
@@ -205,10 +218,13 @@ class StabilitySample(ArchiveSection):
     )
 
 
-class StabilityUploadSummary(BaseSection, EntryData):
+class StabilityUploadSummary(PlotSection, BaseSection, EntryData):
     """
     All files of one stability upload, with the institutions that measured them and
     the proposal under which they were measured.
+
+    Its figure shows when each sample was measured: one row per sample, one dot per
+    file at the file's time stamp, coloured by measurement kind.
     """
 
     institutions = Quantity(
@@ -289,6 +305,7 @@ class StabilityUploadSummary(BaseSection, EntryData):
         # Build each sample group while reading its files' entries.
         by_sample: dict[str | None, StabilitySample] = {}
         measurement_times = {}
+        entries = {}
         for record in self.files:
             try:
                 entry = record.entry
@@ -315,6 +332,7 @@ class StabilityUploadSummary(BaseSection, EntryData):
             )
             # Remember the measurement time so sorting does not need to read the entry.
             measurement_times[record.file] = entry.time_stamp if entry else None
+            entries[record.file] = entry
 
         def measured_first(record):
             time_stamp = measurement_times[record.file]
@@ -331,6 +349,169 @@ class StabilityUploadSummary(BaseSection, EntryData):
             # Sort each group's files by measurement time before adding it to the summary.
             group.files = sorted(group.files, key=measured_first)
             self.samples.append(group)
+
+        self.figures = _measurement_timeline(self.samples, entries)
+
+
+#: Size of a file's dots in the measurement timeline, in pixels. A file's line from
+#: start to end is as thick as its dots.
+TIMELINE_MARKER_SIZE = 8
+
+#: How opaque dots and lines are, so that overlapping files stay visible.
+TIMELINE_OPACITY = 0.5
+
+#: The part of a sample's row over which the kinds are spread, in rows.
+TIMELINE_ROW_SPREAD = 0.6
+
+#: How much paler the dot at the end of a measurement is than the one at its start:
+#: the share of white mixed into the kind's colour.
+TIMELINE_END_PALENESS = 0.6
+
+#: The legend entry that explains the paler dots.
+TIMELINE_END_LEGEND = 'paler dot: end of a measurement'
+
+
+def _measurement_timeline(
+    samples: list[StabilitySample], entries: dict
+) -> list[PlotlyFigure]:
+    """A figure with one row per sample and one line per file from the start to the
+    end of its measurement, with a dot at both ends, coloured by measurement kind,
+    with the file name shown on hover. The dot at the end is paler than the one at
+    the start, as a grey entry of the legend explains. A file that ends when it
+    starts is one dot, in the colour of a start.
+
+    Within a sample's row, each kind of the upload has its own slight vertical
+    offset, so that files of different kinds over the same time stay apart. Dots and
+    lines are translucent, so that overlapping files stay visible.
+
+    Files without sample or time stamp are not plotted. Without any plottable file,
+    no figure. Rows keep the order of `samples`, top to bottom. Each kind has its
+    own colour, the same in every upload. An entry made before end times existed
+    ends when it starts."""
+    import plotly.graph_objects as go
+    from plotly.colors import hex_to_rgb, qualitative
+
+    rows = [group for group in samples if group.sample.id is not None]
+    sample_ids = [group.sample.id for group in rows]
+    files_by_kind: dict[str, list] = {}
+    for row, group in enumerate(rows):
+        for record in group.files:
+            entry = entries[record.file]
+            if entry is None or entry.time_stamp is None:
+                continue
+            files_by_kind.setdefault(entry.measurement_kind or 'unknown', []).append(
+                (row, group.sample.id, record.file, entry)
+            )
+    if not files_by_kind:
+        return []
+
+    kinds = sorted(files_by_kind, key=MEASUREMENT_KINDS.index)
+    spacing = TIMELINE_ROW_SPREAD / max(len(kinds) - 1, 1)
+    # Dark24 has more colours than there are measurement kinds.
+    colors = qualitative.Dark24
+    figure = go.Figure()
+    for index, kind in enumerate(kinds):
+        offset = (index - (len(kinds) - 1) / 2) * spacing
+        red, green, blue = hex_to_rgb(colors[MEASUREMENT_KINDS.index(kind)])
+        color = _rgba(red, green, blue)
+        pale = _rgba(*(_paler(value) for value in (red, green, blue)))
+        x, y, hover, dot_colors = [], [], [], []
+        for row, sample_id, path, entry in files_by_kind[kind]:
+            start = entry.time_stamp
+            end = entry.end_time or start
+            text = (
+                PurePosixPath(path).name,
+                sample_id,
+                f'{start:%Y-%m-%d %H:%M:%S}',
+                f'{end:%Y-%m-%d %H:%M:%S}',
+            )
+            # One point for a file that ends when it starts, else its two ends;
+            # `None` separates the files.
+            times = [start] if end == start else [start, end]
+            x += [*times, None]
+            y += [row + offset] * len(times) + [None]
+            hover += [text] * len(times) + [None]
+            dot_colors += [color, pale][: len(times)] + [color]
+
+        figure.add_trace(
+            go.Scatter(
+                x=x,
+                y=y,
+                customdata=hover,
+                name=kind,
+                mode='lines+markers',
+                connectgaps=False,
+                line=dict(color=color, width=TIMELINE_MARKER_SIZE),
+                marker=dict(color=dot_colors, size=TIMELINE_MARKER_SIZE),
+                hovertemplate='%{customdata[0]}<br>%{customdata[1]}<br>'
+                '%{customdata[2]} – %{customdata[3]}',
+            )
+        )
+
+    # A legend entry without data, in grey, for what the paler dots mean.
+    grey = _paler(0)
+    figure.add_trace(
+        go.Scatter(
+            x=[None],
+            y=[None],
+            name=TIMELINE_END_LEGEND,
+            mode='markers',
+            marker=dict(color=_rgba(grey, grey, grey), size=TIMELINE_MARKER_SIZE),
+            hoverinfo='skip',
+        )
+    )
+
+    # Enough room per row that the kinds' offsets stay apart.
+    row_height = max(20, 6 * len(kinds))
+    figure.update_layout(
+        template='plotly_white',
+        showlegend=True,
+        legend_title_text='Measurement kind',
+        # NOMAD's new GUI replaces a figure's template by its own, which turns
+        # hovering off; set here, hovering stays on.
+        hovermode='closest',
+        # NOMAD's GUI fixes the margins once the figure is first drawn. Tick labels
+        # of one line at every zoom level, which Plotly's default date ticks are
+        # not, and a few of them, so they never turn, keep the space below the axis
+        # the same when zooming, and the title clear of the labels.
+        xaxis=dict(
+            title=dict(text='Time (UTC)', standoff=15),
+            tickformatstops=[
+                dict(dtickrange=[None, 60_000], value='%b %d %H:%M:%S'),
+                dict(dtickrange=[60_000, 86_400_000], value='%b %d %H:%M'),
+                dict(dtickrange=[86_400_000, None], value='%b %d, %Y'),
+            ],
+            nticks=6,
+            tickangle=0,
+            automargin=True,
+        ),
+        margin=dict(b=80),
+        yaxis=dict(
+            title='Sample',
+            tickmode='array',
+            tickvals=list(range(len(sample_ids))),
+            ticktext=sample_ids,
+            range=[len(sample_ids) - 0.5, -0.5],
+            zeroline=False,
+            showgrid=False,
+        ),
+        height=max(400, 150 + row_height * len(sample_ids)),
+    )
+    return [
+        PlotlyFigure(
+            label='Measurement timeline', open=True, figure=figure.to_plotly_json()
+        )
+    ]
+
+
+def _paler(value: int) -> int:
+    """A colour channel's `value` mixed with white by `TIMELINE_END_PALENESS`."""
+    return round(value + (255 - value) * TIMELINE_END_PALENESS)
+
+
+def _rgba(red: int, green: int, blue: int) -> str:
+    """A Plotly colour with the timeline's translucency."""
+    return f'rgba({red}, {green}, {blue}, {TIMELINE_OPACITY})'
 
 
 m_package.__init_metainfo__()
