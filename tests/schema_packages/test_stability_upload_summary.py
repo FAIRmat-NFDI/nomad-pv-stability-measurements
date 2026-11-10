@@ -126,3 +126,17 @@ def test_summary_names_the_uploaders_institution_for_files_in_no_folder(
         'HZB',
         'UNITOV',
     ]
+
+
+def test_summary_links_to_the_files_app_filtered_to_its_upload(staging_upload):
+    from nomad_pv_stability_measurements.apps.stability_files import (
+        stability_files_app,
+    )
+
+    summary = StabilityUploadSummary()
+    normalize(staging_upload, {'UNITOV/run_1/001_JV.txt': UNITOV_JV}, summary)
+
+    query = f'?upload_id={staging_upload.upload_id}'
+    path = stability_files_app.path
+    assert summary.files_app.endswith(f'/apps/{path}{query}')
+    assert summary.files_app_classic.endswith(f'/search/{path}{query}')

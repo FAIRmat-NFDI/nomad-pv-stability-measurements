@@ -12,7 +12,9 @@ if TYPE_CHECKING:
 
 from datetime import datetime, timezone, tzinfo
 from pathlib import PurePosixPath
+from urllib.parse import urlencode
 
+import numpy as np
 from nomad.config import config
 from nomad.datamodel.data import ArchiveSection, EntryData, Schema
 from nomad.datamodel.metainfo.annotations import (
@@ -26,6 +28,7 @@ from nomad.datamodel.metainfo.annotations import (
 from nomad.datamodel.metainfo.basesections import BaseSection
 from nomad.datamodel.metainfo.plot import PlotlyFigure, PlotSection
 from nomad.metainfo import (
+    URL,
     Datetime,
     MEnum,
     MetainfoReferenceError,
@@ -191,6 +194,23 @@ class StabilityFile(EntryData):
         """,
     )
 
+    duration = Quantity(
+        type=np.float64,
+        unit='hour',
+        description="""
+        How long the measurement ran, from `start_time` to `end_time`; zero for a
+        measurement without an end time. Derived on normalization. Empty without a
+        start time.
+        """,
+    )
+
+    def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
+        super().normalize(archive, logger)
+        self.duration = None
+        if self.start_time is not None:
+            end_time = self.end_time or self.start_time
+            self.duration = (end_time - self.start_time).total_seconds() / 3600
+
 
 class StabilityFileReference(ArchiveSection):
     """
@@ -266,6 +286,20 @@ class StabilityUploadSummary(PlotSection, BaseSection, EntryData):
         description='A URI of the proposal under which these measurements were made.',
         a_eln=ELNAnnotation(component=ELNComponentEnum.URLEditQuantity),
     )
+    files_app = Quantity(
+        type=URL,
+        description="""
+        Opens the app "Stability files" in NOMAD's new GUI with the files of this
+        upload: their plots, filters and table. Derived from the upload.
+        """,
+    )
+    files_app_classic = Quantity(
+        type=URL,
+        description="""
+        Opens the app "Stability files" in NOMAD's classic GUI with the files of this
+        upload. Derived from the upload.
+        """,
+    )
 
     file_groups = SubSection(
         section_def=StabilitySampleGroup,
@@ -298,6 +332,8 @@ class StabilityUploadSummary(PlotSection, BaseSection, EntryData):
 
         upload_files = getattr(archive.m_context, 'upload_files', None)
         upload_id = archive.metadata.upload_id if archive.metadata else None
+        if upload_id is not None:
+            self.files_app, self.files_app_classic = _files_app_urls(upload_id)
         if upload_files is None or upload_id is None:
             return
 
@@ -632,6 +668,28 @@ def _measurement_timeline(
             label='Measurement timeline', open=True, figure=figure.to_plotly_json()
         )
     ]
+
+
+def _files_app_urls(upload_id: str) -> tuple[str, str]:
+    """The addresses of the app "Stability files", filtered to the files of the
+    upload `upload_id`, in NOMAD's new and in its classic GUI."""
+    from nomad_pv_stability_measurements.apps.stability_files import (
+        stability_files_app,
+    )
+
+    query = urlencode({'upload_id': upload_id})
+    path = stability_files_app.path
+    # The new GUI is served by its own plugin, below the classic GUI's path unless
+    # that plugin says otherwise.
+    try:
+        gui_v2 = config.get_plugin_entry_point('nomad_gui.apis:gui_api')
+        base_v2 = config.services.base_url(True) + gui_v2.get_public_base_path()
+    except Exception:
+        base_v2 = config.gui_url('v2')
+    return (
+        f'{base_v2}/apps/{path}?{query}',
+        f'{config.gui_url(f"search/{path}")}?{query}',
+    )
 
 
 def _timeline_time_zone(entries) -> tzinfo:

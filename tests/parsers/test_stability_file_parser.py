@@ -175,3 +175,29 @@ def test_file_in_no_institution_folder_belongs_to_the_uploaders_institution(
 def test_parser_takes_data_files_but_not_archive_or_hidden_files(path, is_registered):
     name_re = stability_file_parser_entry_point.mainfile_name_re
     assert (re.fullmatch(name_re, path) is not None) == is_registered
+
+
+@pytest.mark.parametrize(
+    'start_time, end_time, duration',
+    [
+        (
+            datetime(2023, 10, 19, 16, tzinfo=timezone.utc),
+            datetime(2023, 10, 19, 17, 30, tzinfo=timezone.utc),
+            1.5,
+        ),
+        (datetime(2023, 10, 19, 16, tzinfo=timezone.utc), None, 0),
+        (None, None, None),
+    ],
+)
+def test_file_entry_knows_how_long_its_measurement_ran(start_time, end_time, duration):
+    from nomad_pv_stability_measurements.schema_packages.schema_package import (
+        StabilityFile,
+    )
+
+    entry = StabilityFile(start_time=start_time, end_time=end_time)
+    entry.normalize(EntryArchive(data=entry), utils.get_logger(__name__))
+
+    if duration is None:
+        assert entry.duration is None
+    else:
+        assert entry.duration.to('hour').magnitude == pytest.approx(duration)
