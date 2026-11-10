@@ -139,4 +139,3 @@ def test_summary_links_to_the_files_app_filtered_to_its_upload(staging_upload):
     query = f'?upload_id={staging_upload.upload_id}'
     path = stability_files_app.path
     assert summary.files_app.endswith(f'/apps/{path}{query}')
-    assert summary.files_app_classic.endswith(f'/search/{path}{query}')

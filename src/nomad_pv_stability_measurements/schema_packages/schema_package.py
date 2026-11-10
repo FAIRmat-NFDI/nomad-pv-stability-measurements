@@ -283,21 +283,14 @@ class StabilityUploadSummary(PlotSection, BaseSection, EntryData):
     )
     proposal = Quantity(
         type=str,
-        description='A URI of the proposal under which these measurements were made.',
-        a_eln=ELNAnnotation(component=ELNComponentEnum.URLEditQuantity),
+        description='A URI of the proposal under which these measurements were made.'
     )
+    
     files_app = Quantity(
         type=URL,
         description="""
         Opens the app "Stability files" in NOMAD's new GUI with the files of this
         upload: their plots, filters and table. Derived from the upload.
-        """,
-    )
-    files_app_classic = Quantity(
-        type=URL,
-        description="""
-        Opens the app "Stability files" in NOMAD's classic GUI with the files of this
-        upload. Derived from the upload.
         """,
     )
 
@@ -333,7 +326,7 @@ class StabilityUploadSummary(PlotSection, BaseSection, EntryData):
         upload_files = getattr(archive.m_context, 'upload_files', None)
         upload_id = archive.metadata.upload_id if archive.metadata else None
         if upload_id is not None:
-            self.files_app, self.files_app_classic = _files_app_urls(upload_id)
+            self.files_app = _files_app_url(upload_id)
         if upload_files is None or upload_id is None:
             return
 
@@ -670,9 +663,9 @@ def _measurement_timeline(
     ]
 
 
-def _files_app_urls(upload_id: str) -> tuple[str, str]:
-    """The addresses of the app "Stability files", filtered to the files of the
-    upload `upload_id`, in NOMAD's new and in its classic GUI."""
+def _files_app_url(upload_id: str) -> str:
+    """The address of the app "Stability files" in NOMAD's new GUI, filtered to the
+    files of the upload `upload_id`."""
     from nomad_pv_stability_measurements.apps.stability_files import (
         stability_files_app,
     )
@@ -686,10 +679,7 @@ def _files_app_urls(upload_id: str) -> tuple[str, str]:
         base_v2 = config.services.base_url(True) + gui_v2.get_public_base_path()
     except Exception:
         base_v2 = config.gui_url('v2')
-    return (
-        f'{base_v2}/apps/{path}?{query}',
-        f'{config.gui_url(f"search/{path}")}?{query}',
-    )
+    return f'{base_v2}/apps/{path}?{query}'
 
 
 def _timeline_time_zone(entries) -> tzinfo:
