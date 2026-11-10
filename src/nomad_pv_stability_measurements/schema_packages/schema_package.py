@@ -19,6 +19,8 @@ from nomad.datamodel.metainfo.annotations import (
     BrowserAnnotation,
     ELNAnnotation,
     ELNComponentEnum,
+    Filter,
+    SectionDisplayAnnotation,
 )
 from nomad.datamodel.metainfo.basesections import BaseSection
 from nomad.datamodel.metainfo.plot import PlotlyFigure, PlotSection
@@ -28,6 +30,7 @@ from nomad.metainfo import (
     MetainfoReferenceError,
     Quantity,
     SchemaPackage,
+    Section,
     SubSection,
 )
 from nomad.utils import generate_entry_id
@@ -120,7 +123,6 @@ class StabilityFile(EntryData):
     file = Quantity(
         type=str,
         description='The path of the file, relative to the upload.',
-        a_eln=ELNAnnotation(component=ELNComponentEnum.FileEditQuantity),
         a_browser=BrowserAnnotation(adaptor=BrowserAdaptors.RawFileAdaptor),
     )
 
@@ -236,6 +238,14 @@ class StabilityUploadSummary(PlotSection, BaseSection, EntryData):
     Its figure shows when each sample was measured: one row per sample, one dot per
     file at the file's start time, coloured by measurement kind.
     """
+
+    # An upload has no lab ID, and the time NOMAD fills in is only that of the
+    # first processing, so both are not shown.
+    m_def = Section(
+        a_display=SectionDisplayAnnotation(
+            visible=Filter(exclude=['lab_id', 'datetime'])
+        )
+    )
 
     institutions = Quantity(
         type=str,
