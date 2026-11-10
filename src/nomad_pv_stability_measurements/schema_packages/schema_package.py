@@ -69,6 +69,9 @@ MEASUREMENT_KINDS = [
     'el_image',
     'environment_log',
     'metadata',
+    'measurement_protocol',
+    'XRD',
+    'SEM',
     'other',
     'unknown',
 ]
@@ -101,26 +104,14 @@ FILE_FORMATS = [
 ]
 
 
-class StabilitySampleIdentity(ArchiveSection):
-    """Sample identity reported by the institution's reading code."""
-
-    id = Quantity(
-        type=str,
-        description='The identifier of the sample as the institution writes it.',
-    )
-
-    reference = Quantity(
-        type=str,
-        description="""
-        A URI identifying the sample: a NOMAD entry, an external database, or any
-        other resolvable identifier.
-        """,
-    )
+#: The sample under which a summary lists the files whose sample is not known.
+UNKNOWN_SAMPLE = 'Unknown'
 
 
-class StabilityFile(ArchiveSection):
+class StabilityFile(EntryData):
     """
-    One file of a stability upload, registered with what is known about it.
+    The entry made from one file of a stability upload, registered with what is
+    known about it.
 
     Values are stored as the institution's reading code provides them; this section
     does not interpret file contents. Fields that nothing could determine stay empty.
@@ -158,7 +149,7 @@ class StabilityFile(ArchiveSection):
         description='How the file is stored, as given by its file name extension.',
     )
 
-    time_stamp = Quantity(
+    start_time = Quantity(
         type=Datetime,
         description="""
         When the measurement in this file started, as an absolute time. Give a
@@ -172,17 +163,27 @@ class StabilityFile(ArchiveSection):
         type=Datetime,
         description="""
         When the measurement in this file finished, as an absolute time, with the
-        same time zone rule as `time_stamp`. Equal to `time_stamp` if the
+        same time zone rule as `start_time`. Equal to `start_time` if the
         institution's reading code gives no end, as for a measurement that takes
         only seconds.
         """,
     )
 
-    sample = SubSection(section_def=StabilitySampleIdentity)
+    sample_id = Quantity(
+        type=str,
+        description="""
+        The identifier of the measured sample as the institution writes it. Empty if
+        the institution's reading code does not know it.
+        """,
+    )
 
-
-class StabilityFileEntry(StabilityFile, EntryData):
-    """The entry made from one file of a stability upload."""
+    sample_reference = Quantity(
+        type=str,
+        description="""
+        A URI identifying the sample: a NOMAD entry, an external database, or any
+        other resolvable identifier.
+        """,
+    )
 
 
 class StabilityFileReference(ArchiveSection):
@@ -200,32 +201,40 @@ class StabilityFileReference(ArchiveSection):
         a_browser=BrowserAnnotation(adaptor=BrowserAdaptors.RawFileAdaptor),
     )
     entry = Quantity(
-        type=StabilityFileEntry,
+        type=StabilityFile,
         description='The entry made from the file.',
     )
 
 
-class StabilitySample(ArchiveSection):
-    """The files of one sample of a stability upload, in the order they were measured."""
+class StabilitySampleGroup(ArchiveSection):
+    """The files of one sample of a stability upload, in the order they were measured.
+    What is known about the sample is in the files' entries."""
 
-    sample = SubSection(section_def=StabilitySampleIdentity)
+    sample_id = Quantity(
+        type=str,
+        description=f"""
+        The identifier of the sample as the institution writes it, or
+        `{UNKNOWN_SAMPLE}` for the files whose sample is not known. A sample that the
+        institution itself names `{UNKNOWN_SAMPLE}` shares that group.
+        """,
+    )
     files = SubSection(
         section_def=StabilityFileReference,
         repeats=True,
         description="""
-        One record per file of the sample, ordered by time stamp. Files without a time
-        stamp come last.
+        One record per file of the sample, ordered by start time. Files without a start
+        time come last.
         """,
     )
 
 
 class StabilityUploadSummary(PlotSection, BaseSection, EntryData):
     """
-    All files of one stability upload, with the institutions that measured them and
-    the proposal under which they were measured.
+    All files of one stability upload, grouped by sample, with the institutions that
+    measured them and the proposal under which they were measured.
 
     Its figure shows when each sample was measured: one row per sample, one dot per
-    file at the file's time stamp, coloured by measurement kind.
+    file at the file's start time, coloured by measurement kind.
     """
 
     institutions = Quantity(
@@ -244,34 +253,26 @@ class StabilityUploadSummary(PlotSection, BaseSection, EntryData):
         a_eln=ELNAnnotation(component=ELNComponentEnum.URLEditQuantity),
     )
 
-    files = SubSection(
-        section_def=StabilityFileReference,
+    file_groups = SubSection(
+        section_def=StabilitySampleGroup,
         repeats=True,
-        description="""
-        One record per file of the upload, referencing the file's entry. Derived from
-        the files; records entered here are replaced.
-        """,
-    )
-    samples = SubSection(
-        section_def=StabilitySample,
-        repeats=True,
-        description="""
-        The files of the upload grouped by sample, ordered by sample identifier. The
-        files whose sample is not known are in a last group without identifier.
-        Derived from the files' entries; records entered here are replaced.
+        description=f"""
+        Every file of the upload, grouped by sample, ordered by sample identifier.
+        Each file is in exactly one group; the files whose sample is not known are in
+        a last group `{UNKNOWN_SAMPLE}`. Derived from the files' entries; records
+        entered here are replaced.
         """,
     )
 
     def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
-        """Lists every registered file of the upload with a reference to its entry,
-        derives `institutions` from the files' institution folders or else the
-        uploader's email domain, and groups the files by the sample their entries
-        name.
+        """Groups every registered file of the upload by the sample its entry names,
+        with a reference to the entry, and derives `institutions` from the files'
+        institution folders or else the uploader's email domain.
 
-        `files` and `institutions` follow from the upload's file paths and its
-        uploader alone. The
-        groups read the files' entries, which NOMAD processes before the summary; a
-        file whose entry cannot be read is in the group without sample."""
+        `institutions` follows from the upload's file paths and its uploader alone.
+        The groups read the files' entries, which NOMAD processes before the summary;
+        a file without sample, or whose entry cannot be read, is in the group
+        `UNKNOWN_SAMPLE`."""
         super().normalize(archive, logger)
 
         # Imported here, because the parser module imports this module.
@@ -291,6 +292,12 @@ class StabilityUploadSummary(PlotSection, BaseSection, EntryData):
             for info in upload_files.raw_listdir(recursive=True, files_only=True)
             if is_registered(info.path)
         )
+        email = uploader_email(archive)
+        institutions = {institution_of(path, email) for path in paths}
+        self.institutions = sorted(
+            institution.INSTITUTION for institution in institutions if institution
+        )
+
         # An entry's id follows from its upload and its file, so the reference can be
         # written whether or not the entry exists yet.
         references = {
@@ -298,65 +305,52 @@ class StabilityUploadSummary(PlotSection, BaseSection, EntryData):
             f'{generate_entry_id(upload_id, path)}#data'
             for path in paths
         }
-        self.files = [
-            StabilityFileReference(file=path, entry=reference)
-            for path, reference in references.items()
+        # A reference is followed through the archive it is part of, so the records
+        # are attached to the summary before their entries are read.
+        self.file_groups = [
+            StabilitySampleGroup(
+                files=[
+                    StabilityFileReference(file=path, entry=reference)
+                    for path, reference in references.items()
+                ]
+            )
         ]
-        email = uploader_email(archive)
-        institutions = {institution_of(path, email) for path in paths}
-        self.institutions = sorted(
-            institution.INSTITUTION for institution in institutions if institution
-        )
-
-        # Build each sample group while reading its files' entries.
-        by_sample: dict[str | None, StabilitySample] = {}
-        measurement_times = {}
         entries = {}
-        for record in self.files:
+        for record in self.file_groups[0].files:
             try:
-                entry = record.entry
-                sample_id = entry.sample.id if entry.sample else None
+                entries[record.file] = record.entry.m_resolved()
             except MetainfoReferenceError:
                 logger.warning('Could not read the entry of a file.', file=record.file)
-                entry, sample_id = None, None
+                entries[record.file] = None
 
-            # Create a group when its first file is encountered.
-            if sample_id not in by_sample:
-                by_sample[sample_id] = StabilitySample(
-                    sample=StabilitySampleIdentity(id=sample_id)
-                )
-            group = by_sample[sample_id]
-
-            # Keep the first non-empty reference, even if earlier files had none.
-            if not group.sample.reference:
-                if entry and entry.sample and entry.sample.reference:
-                    group.sample.reference = entry.sample.reference
-
-            # Give the group its own file record pointing to the same entry.
-            group.files.append(
-                StabilityFileReference(file=record.file, entry=references[record.file])
+        by_sample: dict[str, StabilitySampleGroup] = {}
+        for path in paths:
+            entry = entries[path]
+            sample_id = (entry.sample_id if entry else None) or UNKNOWN_SAMPLE
+            group = by_sample.setdefault(
+                sample_id, StabilitySampleGroup(sample_id=sample_id)
             )
-            # Remember the measurement time so sorting does not need to read the entry.
-            measurement_times[record.file] = entry.time_stamp if entry else None
-            entries[record.file] = entry
+            group.files.append(
+                StabilityFileReference(file=path, entry=references[path])
+            )
 
         def measured_first(record):
-            time_stamp = measurement_times[record.file]
+            entry = entries[record.file]
+            start_time = entry.start_time if entry else None
             # Put missing times last and use the file path to break ties.
-            return (time_stamp is None, time_stamp, record.file)
+            return (start_time is None, start_time, record.file)
 
         # Order groups by sample identifier, with the unknown-sample group last.
         ordered_ids = sorted(
-            by_sample, key=lambda sample_id: (sample_id is None, sample_id or '')
+            by_sample, key=lambda sample_id: (sample_id == UNKNOWN_SAMPLE, sample_id)
         )
-        self.samples = []
+        self.file_groups = []
         for sample_id in ordered_ids:
             group = by_sample[sample_id]
-            # Sort each group's files by measurement time before adding it to the summary.
             group.files = sorted(group.files, key=measured_first)
-            self.samples.append(group)
+            self.file_groups.append(group)
 
-        self.figures = _measurement_timeline(self.samples, entries)
+        self.figures = _measurement_timeline(self.file_groups, entries)
 
 
 #: Size of a file's dots in the measurement timeline, in pixels. A file's line from
@@ -378,7 +372,7 @@ TIMELINE_END_LEGEND = 'paler dot: end of a measurement'
 
 
 def _measurement_timeline(
-    samples: list[StabilitySample], entries: dict
+    file_groups: list[StabilitySampleGroup], entries: dict
 ) -> list[PlotlyFigure]:
     """A figure with one row per sample and one line per file from the start to the
     end of its measurement, with a dot at both ends, coloured by measurement kind,
@@ -390,23 +384,26 @@ def _measurement_timeline(
     offset, so that files of different kinds over the same time stay apart. Dots and
     lines are translucent, so that overlapping files stay visible.
 
-    Files without sample or time stamp are not plotted. Without any plottable file,
-    no figure. Rows keep the order of `samples`, top to bottom. Each kind has its
-    own colour, the same in every upload. An entry made before end times existed
-    ends when it starts."""
+    Files without start time are not plotted, and a sample without such files, the
+    group `UNKNOWN_SAMPLE` included, has no row. Without any plottable file, no
+    figure. Rows keep the order of `file_groups`, top to bottom. Each kind has its own
+    colour, the same in every upload. An entry made before end times existed ends
+    when it starts."""
     import plotly.graph_objects as go
     from plotly.colors import hex_to_rgb, qualitative
 
-    rows = [group for group in samples if group.sample.id is not None]
-    sample_ids = [group.sample.id for group in rows]
+    def plottable(record):
+        entry = entries[record.file]
+        return entry is not None and entry.start_time is not None
+
+    rows = [group for group in file_groups if any(map(plottable, group.files))]
+    sample_ids = [group.sample_id for group in rows]
     files_by_kind: dict[str, list] = {}
     for row, group in enumerate(rows):
-        for record in group.files:
+        for record in filter(plottable, group.files):
             entry = entries[record.file]
-            if entry is None or entry.time_stamp is None:
-                continue
             files_by_kind.setdefault(entry.measurement_kind or 'unknown', []).append(
-                (row, group.sample.id, record.file, entry)
+                (row, group.sample_id, record.file, entry)
             )
     if not files_by_kind:
         return []
@@ -423,7 +420,7 @@ def _measurement_timeline(
         pale = _rgba(*(_paler(value) for value in (red, green, blue)))
         x, y, hover, dot_colors = [], [], [], []
         for row, sample_id, path, entry in files_by_kind[kind]:
-            start = entry.time_stamp
+            start = entry.start_time
             end = entry.end_time or start
             text = (
                 PurePosixPath(path).name,

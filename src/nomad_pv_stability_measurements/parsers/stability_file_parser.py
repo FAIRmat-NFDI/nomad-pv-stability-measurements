@@ -1,4 +1,4 @@
-"""Registering every file of a stability upload as a `StabilityFileEntry`."""
+"""Registering every file of a stability upload as a `StabilityFile`."""
 
 from typing import (
     TYPE_CHECKING,
@@ -29,8 +29,7 @@ from nomad_pv_stability_measurements.file_reading.file_reading_utils import (
 )
 from nomad_pv_stability_measurements.schema_packages.schema_package import (
     MEASUREMENT_KINDS,
-    StabilityFileEntry,
-    StabilitySampleIdentity,
+    StabilityFile,
     StabilityUploadSummary,
 )
 
@@ -193,18 +192,18 @@ def register_file(
         if result is False:
             continue
 
-        time_stamp, end_time, sample_id, sample_reference, data = result
+        start_time, end_time, sample_id, sample_reference, data = result
         values['measurement_kind'] = kind
-        if time_stamp is not None:
-            values['time_stamp'] = time_stamp
+        if start_time is not None:
+            values['start_time'] = start_time
         if end_time is None:
-            end_time = time_stamp
+            end_time = start_time
         if end_time is not None:
             values['end_time'] = end_time
-        if sample_id is not None or sample_reference is not None:
-            values['sample'] = StabilitySampleIdentity(
-                id=sample_id, reference=sample_reference
-            )
+        if sample_id is not None:
+            values['sample_id'] = sample_id
+        if sample_reference is not None:
+            values['sample_reference'] = sample_reference
         return values, data
 
     logger.warning(
@@ -241,7 +240,7 @@ def ensure_summary(archive: 'EntryArchive', logger: 'BoundLogger') -> None:
 
 
 class StabilityFileParser(MatchingParser):
-    """Makes one `StabilityFileEntry` per file, filled by `register_file`, and
+    """Makes one `StabilityFile` per file, filled by `register_file`, and
     makes sure that the upload has a summary."""
 
     def parse(
@@ -267,6 +266,6 @@ class StabilityFileParser(MatchingParser):
             tail = read_tail(file, tail_size)
         # The institution-specific `data` is not stored in the file's entry.
         values, _data = register_file(path, content, tail, logger, email)
-        archive.data = StabilityFileEntry(**values)
+        archive.data = StabilityFile(**values)
 
         ensure_summary(archive, logger)

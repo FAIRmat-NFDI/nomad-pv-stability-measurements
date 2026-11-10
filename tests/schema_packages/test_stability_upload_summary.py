@@ -8,6 +8,7 @@ from nomad_pv_stability_measurements.parsers import (
 )
 from nomad_pv_stability_measurements.schema_packages.schema_package import (
     StabilityFileReference,
+    StabilitySampleGroup,
     StabilityUploadSummary,
 )
 
@@ -41,10 +42,22 @@ def normalize(upload, files: dict[str, str], summary: StabilityUploadSummary):
     summary.normalize(archive, utils.get_logger(__name__))
 
 
+def records(summary: StabilityUploadSummary) -> list[StabilityFileReference]:
+    """The file records of all sample groups of `summary`, ordered by file path."""
+    return sorted(
+        (record for sample in summary.file_groups for record in sample.files),
+        key=lambda record: record.file,
+    )
+
+
 def test_summary_references_the_entry_of_every_file(staging_upload):
     summary = StabilityUploadSummary(
         proposal='https://example.org/proposals/42',
-        files=[StabilityFileReference(file='UNITOV/removed.txt')],
+        file_groups=[
+            StabilitySampleGroup(
+                files=[StabilityFileReference(file='UNITOV/removed.txt')]
+            )
+        ],
     )
     normalize(
         staging_upload,
@@ -60,7 +73,7 @@ def test_summary_references_the_entry_of_every_file(staging_upload):
         summary,
     )
 
-    assert [record.file for record in summary.files] == [
+    assert [record.file for record in records(summary)] == [
         'UNITOV/run_1/001_JV.txt',
         'UNITOV/run_1/plot.pdf',
     ]
@@ -68,8 +81,8 @@ def test_summary_references_the_entry_of_every_file(staging_upload):
     assert summary.proposal == 'https://example.org/proposals/42'
 
     # Following a reference gives the entry of that file.
-    jv, pdf = (record.entry for record in summary.files)
-    assert (jv.file, jv.measurement_kind, jv.sample.id) == (
+    jv, pdf = (record.entry for record in records(summary))
+    assert (jv.file, jv.measurement_kind, jv.sample_id) == (
         'UNITOV/run_1/001_JV.txt',
         'jv',
         '3C_C1_1',
@@ -90,7 +103,7 @@ def test_summary_names_every_institution_of_the_upload(staging_upload):
     )
 
     assert summary.institutions == ['HZB', 'UNITOV']
-    assert [record.entry.institution for record in summary.files] == [
+    assert [record.entry.institution for record in records(summary)] == [
         'HZB',
         'UNITOV',
         None,
@@ -109,4 +122,7 @@ def test_summary_names_the_uploaders_institution_for_files_in_no_folder(
     )
 
     assert summary.institutions == ['HZB', 'UNITOV']
-    assert [record.entry.institution for record in summary.files] == ['HZB', 'UNITOV']
+    assert [record.entry.institution for record in records(summary)] == [
+        'HZB',
+        'UNITOV',
+    ]

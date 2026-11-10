@@ -51,9 +51,9 @@ def test_UNITOV_file_is_registered_with_kind_sample_and_start(tmp_path):
     assert data.institution == 'UNITOV'
     assert data.measurement_kind == 'jv'
     assert data.file_format == 'txt'
-    assert data.sample.id == '3C_C1_1'
+    assert data.sample_id == '3C_C1_1'
     # 18:34:18 local time in Rome, in summer time (UTC+2).
-    assert data.time_stamp == datetime(2023, 10, 19, 16, 34, 18, tzinfo=timezone.utc)
+    assert data.start_time == datetime(2023, 10, 19, 16, 34, 18, tzinfo=timezone.utc)
 
 
 #: A UNITOV MPP tracking file of two hours, started at 18:34:18 in Rome. Long enough
@@ -78,7 +78,7 @@ def test_UNITOV_file_ends_at_its_last_row_or_else_when_it_starts(tmp_path):
     assert tracked.measurement_kind == 'mpp_tracking'
     # Two hours after the start at 18:34:18 in Rome.
     assert tracked.end_time == datetime(2023, 10, 19, 18, 34, 18, tzinfo=timezone.utc)
-    assert swept.end_time == swept.time_stamp
+    assert swept.end_time == swept.start_time
 
 
 def test_institution_without_tail_gets_no_end_from_the_last_row(tmp_path, monkeypatch):
@@ -87,7 +87,7 @@ def test_institution_without_tail_gets_no_end_from_the_last_row(tmp_path, monkey
     tracked = parse(tmp_path, tracking_path, UNITOV_LONG_TRACKING.encode()).data
 
     assert tracked.measurement_kind == 'mpp_tracking'
-    assert tracked.end_time == tracked.time_stamp
+    assert tracked.end_time == tracked.start_time
 
 
 def test_utf8_header_text_is_kept(tmp_path):
@@ -95,7 +95,7 @@ def test_utf8_header_text_is_kept(tmp_path):
     content = UNITOV_JV.replace('3C_C1_1', 'Zelle_µ1').encode('utf-8')
     data = parse(tmp_path, 'UNITOV/run_1/001_JV.txt', content).data
 
-    assert data.sample.id == 'Zelle_µ1'
+    assert data.sample_id == 'Zelle_µ1'
 
 
 @pytest.mark.parametrize(
@@ -115,8 +115,8 @@ def test_unrecognized_file_is_registered_as_unknown(tmp_path, path, content, log
 
     assert data.file == path
     assert data.measurement_kind == 'unknown'
-    assert data.sample is None
-    assert data.time_stamp is None
+    assert data.sample_id is None
+    assert data.start_time is None
 
 
 @pytest.mark.parametrize(

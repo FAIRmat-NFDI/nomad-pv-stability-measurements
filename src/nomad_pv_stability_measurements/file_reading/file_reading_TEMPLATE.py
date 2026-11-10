@@ -12,7 +12,7 @@ with `TAIL_SIZE = 0`, `tail` is empty. For a short file, the two overlap. If the
 is not of its kind, it must return `False`. Otherwise it must return five values, in
 this order:
 
-    time_stamp        when the measurement started, a `datetime` with its time zone
+    start_time        when the measurement started, a `datetime` with its time zone
     end_time          when the measurement finished, a `datetime` with its time zone;
                       if `None`, the end is taken to be the start
     sample_id         the identifier of the measured sample, a text
@@ -83,13 +83,13 @@ def match_jv(path: str, content: str, tail: str) -> tuple | bool:
         return False
 
     start = datetime.strptime(name_match.group(1), '%Y%m%d_%H%M%S')
-    time_stamp = start.replace(tzinfo=LOCAL_TIME_ZONE)
+    start_time = start.replace(tzinfo=LOCAL_TIME_ZONE)
     sample_id = folders_and_name[-2]
     sample_reference = f'https://example.org/samples/{sample_id}'
     data = {'separator': ','}
     # A sweep takes seconds; its end is not written down.
     end_time = None
-    return time_stamp, end_time, sample_id, sample_reference, data
+    return start_time, end_time, sample_id, sample_reference, data
 
 
 def match_mpp_tracking(path: str, content: str, tail: str) -> tuple | bool:
@@ -117,13 +117,13 @@ def match_mpp_tracking(path: str, content: str, tail: str) -> tuple | bool:
             key, value = line[2:].split(':', 1)
             header[key.strip()] = value.strip()
 
-    time_stamp = datetime.fromisoformat(header['Start'])
+    start_time = datetime.fromisoformat(header['Start'])
     sample_id = header['Sample']
     sample_reference = header['Sample URI']
     last_row = tail.strip().split('\n')[-1]
-    end_time = time_stamp + timedelta(seconds=float(last_row.split('\t')[0]))
+    end_time = start_time + timedelta(seconds=float(last_row.split('\t')[0]))
     data = {'separator': '\t'}
-    return time_stamp, end_time, sample_id, sample_reference, data
+    return start_time, end_time, sample_id, sample_reference, data
 
 
 def match_image(path: str, content: str, tail: str) -> tuple | bool:
@@ -141,9 +141,9 @@ def match_image(path: str, content: str, tail: str) -> tuple | bool:
         return False
 
     start = datetime.strptime(name_match.group(2), '%Y%m%d_%H%M%S')
-    time_stamp = start.replace(tzinfo=LOCAL_TIME_ZONE)
+    start_time = start.replace(tzinfo=LOCAL_TIME_ZONE)
     sample_id = name_match.group(1)
     sample_reference = f'https://example.org/samples/{sample_id}'
     end_time = None
     data = {}
-    return time_stamp, end_time, sample_id, sample_reference, data
+    return start_time, end_time, sample_id, sample_reference, data

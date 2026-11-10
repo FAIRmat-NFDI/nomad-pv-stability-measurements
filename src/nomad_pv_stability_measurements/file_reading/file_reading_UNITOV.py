@@ -67,19 +67,19 @@ def _match(
     if mppt is not None and (header.get('Algorithm') == 'MPPT') != mppt:
         return False
 
-    time_stamp = None
+    start_time = None
     if header.get('Date') and header.get('Time'):
         start = datetime.fromisoformat(f'{header["Date"]}T{header["Time"]}')
-        time_stamp = start.replace(tzinfo=_LOCAL_TIME_ZONE)
+        start_time = start.replace(tzinfo=_LOCAL_TIME_ZONE)
     end_time = None
-    if time_stamp is not None and tail is not None:
+    if start_time is not None and tail is not None:
         hours = _hours_of_last_row(tail)
         if hours is not None:
-            end_time = time_stamp + timedelta(hours=hours)
+            end_time = start_time + timedelta(hours=hours)
     sample_id = header.get('Device') or None
     sample_reference = None
     data = {}
-    return time_stamp, end_time, sample_id, sample_reference, data
+    return start_time, end_time, sample_id, sample_reference, data
 
 
 def _hours_of_last_row(tail: str) -> float | None:

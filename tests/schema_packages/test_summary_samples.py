@@ -2,8 +2,7 @@ import pytest
 from test_stability_upload_summary import normalize
 
 from nomad_pv_stability_measurements.schema_packages.schema_package import (
-    StabilitySample,
-    StabilitySampleIdentity,
+    StabilitySampleGroup,
     StabilityUploadSummary,
 )
 
@@ -21,7 +20,7 @@ def unitov_jv(device: str, date: str, time: str) -> str:
 
 def test_summary_groups_the_files_by_sample_in_measurement_order(staging_upload):
     summary = StabilityUploadSummary(
-        samples=[StabilitySample(sample=StabilitySampleIdentity(id='entered'))]
+        file_groups=[StabilitySampleGroup(sample_id='entered')]
     )
     normalize(
         staging_upload,
@@ -37,8 +36,8 @@ def test_summary_groups_the_files_by_sample_in_measurement_order(staging_upload)
     )
 
     assert [
-        (sample.sample.id, [record.file for record in sample.files])
-        for sample in summary.samples
+        (sample.sample_id, [record.file for record in sample.files])
+        for sample in summary.file_groups
     ] == [
         (
             'A1',
@@ -50,17 +49,17 @@ def test_summary_groups_the_files_by_sample_in_measurement_order(staging_upload)
             ],
         ),
         ('B2', ['UNITOV/run_1/001_JV.txt']),
-        (None, ['UNITOV/run_1/plot.pdf']),
+        ('Unknown', ['UNITOV/run_1/plot.pdf']),
     ]
     # Following a reference gives the entry of that file.
-    first_of_a1 = summary.samples[0].files[0].entry
-    assert (first_of_a1.file, first_of_a1.sample.id) == (
+    first_of_a1 = summary.file_groups[0].files[0].entry
+    assert (first_of_a1.file, first_of_a1.sample_id) == (
         'UNITOV/run_2/001_JV.txt',
         'A1',
     )
 
 
-def test_summary_preserves_the_sample_reference(staging_upload, monkeypatch):
+def test_summary_keeps_each_files_own_sample_reference(staging_upload, monkeypatch):
     from nomad_pv_stability_measurements.file_reading import file_reading_UNITOV
 
     reference = 'https://example.org/samples/A1'
@@ -81,11 +80,12 @@ def test_summary_preserves_the_sample_reference(staging_upload, monkeypatch):
         summary,
     )
 
-    group = summary.samples[0]
-    assert (group.sample.id, group.sample.reference) == ('A1', reference)
+    # One group for the sample, whose files keep their different references.
+    (group,) = summary.file_groups
+    assert group.sample_id == 'A1'
     for record in group.files:
         entry = record.entry
-        assert (entry.sample.id, entry.sample.reference) == (
+        assert (entry.sample_id, entry.sample_reference) == (
             'A1',
             file_references[record.file],
         )
@@ -152,7 +152,9 @@ def test_summary_plots_each_file_from_start_to_end_in_its_sample_row(
                 'A1', '2023-10-19', '18:00:00', [0.01, 0.25, 0.5]
             ),
             'UNITOV/dark/A1_dark.txt': dark_jv,
-            # Not plotted: no time stamp, and no sample.
+            # Of no known sample: plotted in the row of the unknown sample.
+            'UNITOV/run_1/004_JV.txt': unitov_jv('', '2023-10-19', '20:00:00'),
+            # Not plotted: no start time.
             'UNITOV/run_1/003_JV.txt': unitov_jv('A1', '', ''),
             'UNITOV/run_1/plot.pdf': '%PDF-1.4',
         },
@@ -191,8 +193,14 @@ def test_summary_plots_each_file_from_start_to_end_in_its_sample_row(
             '2023-10-20T07:00:00+00:00',
             '2023-10-20T07:00:00+00:00',
         ),
+        '004_JV.txt': (
+            'jv',
+            'Unknown',
+            '2023-10-19T18:00:00+00:00',
+            '2023-10-19T18:00:00+00:00',
+        ),
     }
-    assert figure.figure['layout']['yaxis']['ticktext'] == ['A1', 'B2']
+    assert figure.figure['layout']['yaxis']['ticktext'] == ['A1', 'B2', 'Unknown']
 
     # In one row, each kind lies at its own height, and a kind at the same height
     # in every row.
