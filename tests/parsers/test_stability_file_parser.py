@@ -56,6 +56,27 @@ def test_UNITOV_file_is_registered_with_kind_sample_and_start(tmp_path):
     assert data.start_time == datetime(2023, 10, 19, 16, 34, 18, tzinfo=timezone.utc)
 
 
+@pytest.mark.parametrize(
+    'test, algorithm, kind',
+    [
+        ('Stability (Tracking)', 'MPPT', 'mpp_tracking'),
+        ('Stability (Tracking)', 'Fixed Voltage', 'stability_series'),
+        ('Stability (Parameters)', None, 'jv_parameters'),
+    ],
+)
+def test_UNITOV_series_are_told_apart(tmp_path, test, algorithm, kind):
+    content = UNITOV_JV.replace('Stability (JV)', test)
+    if algorithm:
+        content += f'Algorithm\t{algorithm}\t\r\n'
+    content += 'Time (Hours)\tVoc (V) FW\r\n0.5\t1.05\r\n'
+
+    data = parse(tmp_path, 'UNITOV/run_1/000_series.txt', content.encode()).data
+
+    assert data.measurement_kind == kind
+    # Each series ends at its last row, half an hour after its start.
+    assert data.end_time == datetime(2023, 10, 19, 17, 4, 18, tzinfo=timezone.utc)
+
+
 #: A UNITOV MPP tracking file of two hours, started at 18:34:18 in Rome. Long enough
 #: that its last row lies far beyond the beginning of the file.
 UNITOV_LONG_TRACKING = (

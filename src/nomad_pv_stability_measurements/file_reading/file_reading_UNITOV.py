@@ -37,7 +37,8 @@ HEAD_SIZE = 4096
 #: Bytes from the end given as `tail`: enough for the last data row of a series.
 TAIL_SIZE = 4096
 
-_LOCAL_TIME_ZONE = ZoneInfo('Europe/Rome')
+#: Time zone of the measurement computers, for times written without one.
+LOCAL_TIME_ZONE = ZoneInfo('Europe/Rome')
 
 
 def _match(
@@ -70,7 +71,7 @@ def _match(
     start_time = None
     if header.get('Date') and header.get('Time'):
         start = datetime.fromisoformat(f'{header["Date"]}T{header["Time"]}')
-        start_time = start.replace(tzinfo=_LOCAL_TIME_ZONE)
+        start_time = start.replace(tzinfo=LOCAL_TIME_ZONE)
     end_time = None
     if start_time is not None and tail is not None:
         hours = _hours_of_last_row(tail)
@@ -110,11 +111,14 @@ def match_mpp_tracking(path: str, content: str, tail: str) -> tuple | bool:
 
 
 def match_stability_series(path: str, content: str, tail: str) -> tuple | bool:
-    """The other series of a stability test: one held at a fixed voltage, and the
-    figures of merit of its J–V sweeps over time."""
-    return _match(content, 'Stability (Parameters)', tail=tail) or _match(
-        content, 'Stability (Tracking)', mppt=False, tail=tail
-    )
+    """The series of a stability test that holds the load at a fixed voltage."""
+    return _match(content, 'Stability (Tracking)', mppt=False, tail=tail)
+
+
+def match_jv_parameters(path: str, content: str, tail: str) -> tuple | bool:
+    """The figures of merit of every J–V sweep of a stability test over time, such
+    as efficiency, fill factor, Voc and Jsc."""
+    return _match(content, 'Stability (Parameters)', tail=tail)
 
 
 def match_eqe(path: str, content: str, tail: str) -> tuple | bool:
