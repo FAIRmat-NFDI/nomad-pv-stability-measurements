@@ -192,7 +192,7 @@ def register_file(
         if result is False:
             continue
 
-        start_time, end_time, sample_id, sample_reference, data = result
+        start_time, end_time, provenance, sample_id, sample_reference, data = result
         values['measurement_kind'] = kind
         if start_time is not None:
             values['start_time'] = start_time
@@ -200,6 +200,8 @@ def register_file(
             end_time = start_time
         if end_time is not None:
             values['end_time'] = end_time
+        if provenance is not None:
+            values['provenance'] = provenance
         if sample_id is not None:
             values['sample_id'] = sample_id
         if sample_reference is not None:

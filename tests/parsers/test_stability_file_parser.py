@@ -51,6 +51,7 @@ def test_UNITOV_file_is_registered_with_kind_sample_and_start(tmp_path):
     assert data.institution == 'UNITOV'
     assert data.measurement_kind == 'jv'
     assert data.file_format == 'txt'
+    assert data.provenance == 'measured'
     assert data.sample_id == '3C_C1_1'
     # 18:34:18 local time in Rome, in summer time (UTC+2).
     assert data.start_time == datetime(2023, 10, 19, 16, 34, 18, tzinfo=timezone.utc)

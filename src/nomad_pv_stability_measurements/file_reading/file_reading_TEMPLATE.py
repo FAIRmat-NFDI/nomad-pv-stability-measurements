@@ -30,11 +30,14 @@ TAIL_SIZE = 4096
 #     # path:    file path within the upload
 #     # content: beginning of the file as text; tail: end of the file as text
 #     # Return `False` if the file is not of this kind, otherwise:
-#     return start_time, end_time, sample_id, sample_reference, data
+#     return start_time, end_time, provenance, sample_id, sample_reference, data
 #     # start_time: `datetime` with time zone,
 #     #     e.g. datetime(2026, 1, 5, 10, 0, tzinfo=LOCAL_TIME_ZONE)
 #     # end_time: `datetime` with time zone; `None` = same as start,
 #     #     e.g. start_time + timedelta(hours=2)
+#     # provenance: where the data comes from, one of `PROVENANCES` in
+#     #     `schema_packages/schema_package.py`: 'measured', 'simulated',
+#     #     'derived', 'imported', 'literature', 'note', 'reference' or 'other'
 #     # sample_id: text, e.g. 'AI03-1A'
 #     # sample_reference: URI text, e.g. 'https://example.org/samples/AI03-1A'
 #     # data: dict with anything else, `{}` if nothing, e.g. {'separator': ','}

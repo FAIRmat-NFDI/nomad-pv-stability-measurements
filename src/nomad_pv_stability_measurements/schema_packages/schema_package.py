@@ -113,6 +113,25 @@ FILE_FORMATS = [
     'unknown',
 ]
 
+#: Where the data of a file comes from, with what each value means. Same rule as for
+#: `MEASUREMENT_KINDS`: values are only ever added.
+PROVENANCES = {
+    'measured': 'Measured on the sample.',
+    'simulated': 'Computed by a model of the sample.',
+    'derived': (
+        'Computed from other data, such as figures of merit fitted to measured curves.'
+    ),
+    'imported': 'Taken from another source, such as a database.',
+    'literature': 'Taken from a publication.',
+    'note': 'Written by hand, such as lab notes or values typed in.',
+    'reference': (
+        'Measured on a reference device or standard rather than on the sample '
+        'studied, such as a calibration.'
+    ),
+    'other': 'From a source that none of the other values describes.',
+    'unknown': 'Not known.',
+}
+
 
 #: The sample under which a summary lists the files whose sample is not known.
 UNKNOWN_SAMPLE = 'Unknown'
@@ -175,6 +194,15 @@ class StabilityFile(EntryData):
         same time zone rule as `start_time`. Equal to `start_time` if the
         institution's reading code gives no end, as for a measurement that takes
         only seconds.
+        """,
+    )
+
+    provenance = Quantity(
+        type=MEnum(*PROVENANCES, m_descriptions=PROVENANCES),
+        default='measured',
+        description="""
+        Where the data of the file comes from, as given by the institution's reading
+        code; each value is described with the enumeration.
         """,
     )
 
@@ -283,9 +311,9 @@ class StabilityUploadSummary(PlotSection, BaseSection, EntryData):
     )
     proposal = Quantity(
         type=str,
-        description='A URI of the proposal under which these measurements were made.'
+        description='A URI of the proposal under which these measurements were made.',
     )
-    
+
     files_app = Quantity(
         type=URL,
         description="""

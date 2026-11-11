@@ -72,7 +72,7 @@ def test_summary_keeps_each_files_own_sample_reference(staging_upload, monkeypat
     monkeypatch.setattr(
         file_reading_UNITOV,
         'match_jv',
-        lambda path, content, tail: (None, None, 'A1', file_references[path], {}),
+        lambda path, content, tail: (None, None, None, 'A1', file_references[path], {}),
     )
     summary = StabilityUploadSummary()
     normalize(

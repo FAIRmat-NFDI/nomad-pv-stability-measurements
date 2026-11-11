@@ -59,6 +59,7 @@ stability_files_app = App(
         Column(quantity='upload_name', label='Upload', selected=True),
         Column(quantity=quantity('end_time'), label='End'),
         Column(quantity=quantity('file_format'), label='Format'),
+        Column(quantity=quantity('provenance'), label='Provenance'),
         Column(quantity=quantity('sample_reference'), label='Sample reference'),
         Column(quantity='upload_id'),
         Column(quantity='upload_create_time', label='Upload time'),
@@ -72,6 +73,7 @@ stability_files_app = App(
                 search_quantity=quantity('measurement_kind'), title='Measurement kind'
             ),
             MenuItemTerms(search_quantity=quantity('institution'), title='Institution'),
+            MenuItemTerms(search_quantity=quantity('provenance'), title='Provenance'),
             MenuItemHistogram(x={'search_quantity': quantity('start_time')}),
             MenuItemHistogram(x={'search_quantity': quantity('duration')}),
         ],
