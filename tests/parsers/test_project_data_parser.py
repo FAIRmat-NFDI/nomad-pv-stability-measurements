@@ -1,13 +1,13 @@
 import json
-import re
 
 import pytest
 from nomad import utils
 from nomad.datamodel import EntryArchive, EntryMetadata
+from nomad.parsing.parser import ArchiveParser
+from nomad.parsing.parsers import match_parser
 
 from nomad_pv_stability_measurements.parsers import (
     stability_file_parser_entry_point,
-    summary_parser_entry_point,
 )
 from nomad_pv_stability_measurements.schema_packages.schema_package import (
     StabilityUploadSummary,
@@ -20,17 +20,17 @@ data:
 """
 
 
-def test_parsing_a_file_creates_the_summary(staging_upload):
+def test_parsing_a_file_creates_the_project_entry(staging_upload):
     staging_upload.add({'UNITOV/run_1/001_JV.txt': 'V,J\n'})
     staging_upload.parse('UNITOV/run_1/001_JV.txt')
 
-    with staging_upload.context.raw_file('stability_upload.archive.json') as file:
-        summary = json.load(file)['data']
-    assert summary['m_def'].endswith('.StabilityUploadSummary')
-    assert staging_upload.processed == ['stability_upload.archive.json']
+    with staging_upload.context.raw_file('project_data.archive.json') as file:
+        project = json.load(file)['data']
+    assert project['m_def'].endswith('.ProjectData')
+    assert staging_upload.processed == ['project_data.archive.json']
 
 
-def test_a_supplied_summary_is_kept(staging_upload):
+def test_a_summary_of_an_earlier_version_stays_the_project_entry(staging_upload):
     staging_upload.add(
         {
             'UNITOV/run_1/001_JV.txt': 'V,J\n',
@@ -39,13 +39,13 @@ def test_a_supplied_summary_is_kept(staging_upload):
     )
     staging_upload.parse('UNITOV/run_1/001_JV.txt')
 
-    assert not staging_upload.context.raw_path_exists('stability_upload.archive.json')
+    assert not staging_upload.context.raw_path_exists('project_data.archive.json')
     with staging_upload.context.raw_file('stability_upload.archive.yaml', 'r') as file:
         assert file.read() == SUPPLIED_SUMMARY
     assert staging_upload.processed == []
 
 
-def test_parsing_outside_nomad_processing_creates_no_summary(tmp_path):
+def test_parsing_outside_nomad_processing_creates_no_project_entry(tmp_path):
     (tmp_path / 'UNITOV').mkdir()
     (tmp_path / 'UNITOV' / '001_JV.txt').write_text('V,J\n')
     archive = EntryArchive(metadata=EntryMetadata(mainfile='UNITOV/001_JV.txt'))
@@ -57,33 +57,27 @@ def test_parsing_outside_nomad_processing_creates_no_summary(tmp_path):
     assert sorted(path.name for path in tmp_path.iterdir()) == ['UNITOV']
 
 
-def test_summary_parser_reads_a_supplied_summary(tmp_path):
+def test_nomad_reads_a_summary_of_an_earlier_version(tmp_path):
     summary_file = tmp_path / 'stability_upload.archive.yaml'
     summary_file.write_text(SUPPLIED_SUMMARY)
     archive = EntryArchive(metadata=EntryMetadata())
-    summary_parser_entry_point.load().parse(
-        str(summary_file), archive, utils.get_logger(__name__)
-    )
+    ArchiveParser().parse(str(summary_file), archive, utils.get_logger(__name__))
 
     assert isinstance(archive.data, StabilityUploadSummary)
     assert archive.data.proposal == 'https://example.org/proposals/42'
 
 
 @pytest.mark.parametrize(
-    'path, is_summary',
+    'name',
     [
-        ('/app/.volumes/fs/staging/ab/abc/raw/stability_upload.archive.json', True),
-        ('/app/.volumes/fs/staging/ab/abc/raw/stability_upload.archive.yaml', True),
-        ('/app/.volumes/fs/staging/ab/abc/raw/sample.archive.json', False),
-        ('/app/.volumes/fs/staging/ab/abc/raw/UNITOV/001_JV.txt', False),
+        'project_data.archive.json',
+        'stability_upload.archive.json',
+        'stability_upload.archive.yaml',
     ],
 )
-def test_summary_parser_takes_only_summary_files(path, is_summary):
-    name_re = summary_parser_entry_point.mainfile_name_re
-    assert (re.fullmatch(name_re, path) is not None) == is_summary
-
-
-def test_summaries_are_processed_after_the_files():
-    # NOMAD processes the parsers' levels in increasing order, so the summary's
-    # references to the files' entries can be followed when it is normalized.
-    assert summary_parser_entry_point.level > stability_file_parser_entry_point.level
+def test_project_entries_are_read_by_nomads_archive_parser(tmp_path, name):
+    # Only entries of NOMAD's archive parser can be edited in NOMAD's new GUI.
+    path = tmp_path / name
+    path.write_text('{"data": {}}' if name.endswith('.json') else 'data: {}\n')
+    parser, _ = match_parser(str(path))
+    assert parser.name == 'parsers/archive'

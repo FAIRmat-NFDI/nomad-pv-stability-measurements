@@ -25,7 +25,7 @@ app_entry_point = AppEntryPoint(
 )
 
 #: A search app over the files of all stability uploads, next to the timeline that
-#: each upload's summary shows.
+#: each upload's project entry shows.
 stability_files_app_entry_point = AppEntryPoint(
     name='Stability files',
     description='Search and plot the files of stability measurement uploads.',

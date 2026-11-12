@@ -41,6 +41,7 @@ dev = [
     "pymdown-extensions",
     "mkdocs-click",
     "pytest-asyncio",
+    "openpyxl",
 ]
 
 [tool.uv]
@@ -130,11 +131,12 @@ where = ["src"]
 [project.entry-points.'nomad.plugin']
 parser_entry_point = "nomad_pv_stability_measurements.parsers:parser_entry_point"
 stability_file_parser_entry_point = "nomad_pv_stability_measurements.parsers:stability_file_parser_entry_point"
-summary_parser_entry_point = "nomad_pv_stability_measurements.parsers:summary_parser_entry_point"
 schema_package_entry_point = "nomad_pv_stability_measurements.schema_packages:schema_package_entry_point"
+sample_schema_entry_point = "nomad_pv_stability_measurements.schema_packages:sample_schema_entry_point"
 app_entry_point = "nomad_pv_stability_measurements.apps:app_entry_point"
 stability_files_app_entry_point = "nomad_pv_stability_measurements.apps:stability_files_app_entry_point"
 example_upload_entry_point = "nomad_pv_stability_measurements.example_uploads:example_upload_entry_point"
+stability_example_upload_entry_point = "nomad_pv_stability_measurements.example_uploads:stability_example_upload_entry_point"
 
 [tool.cruft]
 # Avoid updating workflow files, this leads to permissions issues

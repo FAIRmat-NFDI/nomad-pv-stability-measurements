@@ -171,6 +171,10 @@ def test_file_in_no_institution_folder_belongs_to_the_uploaders_institution(
         ('/app/.volumes/fs/staging/ab/abc/raw/sample.archive.json', False),
         ('/app/.volumes/fs/staging/ab/abc/raw/stability_upload.archive.yaml', False),
         ('/app/.volumes/fs/staging/ab/abc/raw/UNITOV/.DS_Store', False),
+        # The project data spreadsheet and its template have their own parser.
+        ('/app/.volumes/fs/staging/ab/abc/raw/project_data.xlsx', False),
+        ('/app/.volumes/fs/staging/ab/abc/raw/docs/project_data_template.xlsx', False),
+        ('/app/.volumes/fs/staging/ab/abc/raw/UNITOV/results.xlsx', True),
     ],
 )
 def test_parser_takes_data_files_but_not_archive_or_hidden_files(path, is_registered):

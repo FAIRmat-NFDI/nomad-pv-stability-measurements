@@ -7,9 +7,9 @@ from nomad_pv_stability_measurements.parsers import (
     stability_file_parser_entry_point,
 )
 from nomad_pv_stability_measurements.schema_packages.schema_package import (
+    ProjectData,
     StabilityFileReference,
     StabilitySampleGroup,
-    StabilityUploadSummary,
 )
 
 UNITOV_JV = (
@@ -21,7 +21,7 @@ UNITOV_JV = (
 )
 
 
-def normalize(upload, files: dict[str, str], summary: StabilityUploadSummary):
+def normalize(upload, files: dict[str, str], summary: ProjectData):
     """Adds `files` to the upload, makes the entries of the files that the file
     parser takes, and normalizes `summary` as the upload's summary."""
     upload.add(files)
@@ -33,7 +33,7 @@ def normalize(upload, files: dict[str, str], summary: StabilityUploadSummary):
     archive = EntryArchive(
         metadata=EntryMetadata(
             upload_id=upload.upload_id,
-            mainfile='stability_upload.archive.json',
+            mainfile='project_data.archive.json',
             main_author=upload.main_author,
         ),
         data=summary,
@@ -42,7 +42,7 @@ def normalize(upload, files: dict[str, str], summary: StabilityUploadSummary):
     summary.normalize(archive, utils.get_logger(__name__))
 
 
-def records(summary: StabilityUploadSummary) -> list[StabilityFileReference]:
+def records(summary: ProjectData) -> list[StabilityFileReference]:
     """The file records of all sample groups of `summary`, ordered by file path."""
     return sorted(
         (record for sample in summary.file_groups for record in sample.files),
@@ -51,7 +51,7 @@ def records(summary: StabilityUploadSummary) -> list[StabilityFileReference]:
 
 
 def test_summary_references_the_entry_of_every_file(staging_upload):
-    summary = StabilityUploadSummary(
+    summary = ProjectData(
         proposal='https://example.org/proposals/42',
         file_groups=[
             StabilitySampleGroup(
@@ -91,7 +91,7 @@ def test_summary_references_the_entry_of_every_file(staging_upload):
 
 
 def test_summary_names_every_institution_of_the_upload(staging_upload):
-    summary = StabilityUploadSummary(institutions=['TEMPLATE'])
+    summary = ProjectData(institutions=['TEMPLATE'])
     normalize(
         staging_upload,
         {
@@ -114,7 +114,7 @@ def test_summary_names_the_uploaders_institution_for_files_in_no_folder(
     staging_upload,
 ):
     staging_upload.main_author = User(email='researcher@uniroma2.it')
-    summary = StabilityUploadSummary()
+    summary = ProjectData()
     normalize(
         staging_upload,
         {'HZB/jv_001.csv': 'V,J\n', 'results/001_JV.txt': UNITOV_JV},
@@ -133,9 +133,23 @@ def test_summary_links_to_the_files_app_filtered_to_its_upload(staging_upload):
         stability_files_app,
     )
 
-    summary = StabilityUploadSummary()
+    summary = ProjectData()
     normalize(staging_upload, {'UNITOV/run_1/001_JV.txt': UNITOV_JV}, summary)
 
     query = f'?upload_id={staging_upload.upload_id}'
     path = stability_files_app.path
     assert summary.files_app.endswith(f'/apps/{path}{query}')
+
+
+def test_summary_does_not_need_the_entries_of_the_files(staging_upload):
+    # NOMAD may process the project entry before the entries of the files.
+    staging_upload.add({'UNITOV/run_1/001_JV.txt': UNITOV_JV, 'HZB/jv_001.csv': ''})
+    summary = ProjectData()
+    normalize(staging_upload, {}, summary)
+
+    assert summary.institutions == ['HZB', 'UNITOV']
+    assert [
+        (group.sample_id, [record.file for record in group.files])
+        for group in summary.file_groups
+    ] == [('3C_C1_1', ['UNITOV/run_1/001_JV.txt']), ('Unknown', ['HZB/jv_001.csv'])]
+    assert len(summary.figures) == 1

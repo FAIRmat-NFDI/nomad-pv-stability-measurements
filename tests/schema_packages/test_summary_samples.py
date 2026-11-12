@@ -3,8 +3,8 @@ from nomad.datamodel.metainfo.plot import PlotlyFigure
 from test_stability_upload_summary import normalize
 
 from nomad_pv_stability_measurements.schema_packages.schema_package import (
+    ProjectData,
     StabilitySampleGroup,
-    StabilityUploadSummary,
 )
 
 
@@ -20,9 +20,7 @@ def unitov_jv(device: str, date: str, time: str) -> str:
 
 
 def test_summary_groups_the_files_by_sample_in_measurement_order(staging_upload):
-    summary = StabilityUploadSummary(
-        file_groups=[StabilitySampleGroup(sample_id='entered')]
-    )
+    summary = ProjectData(file_groups=[StabilitySampleGroup(sample_id='entered')])
     normalize(
         staging_upload,
         {
@@ -74,7 +72,7 @@ def test_summary_keeps_each_files_own_sample_reference(staging_upload, monkeypat
         'match_jv',
         lambda path, content, tail: (None, None, None, 'A1', file_references[path], {}),
     )
-    summary = StabilityUploadSummary()
+    summary = ProjectData()
     normalize(
         staging_upload,
         {path: 'measurement' for path in file_references},
@@ -144,7 +142,7 @@ def timeline(staging_upload) -> PlotlyFigure:
     dark_jv = unitov_jv('A1', '2023-10-20', '09:00:00').replace(
         'Stability (JV)', 'Dark JV'
     )
-    summary = StabilityUploadSummary()
+    summary = ProjectData()
     normalize(
         staging_upload,
         {

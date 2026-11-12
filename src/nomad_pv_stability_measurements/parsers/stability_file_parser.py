@@ -27,10 +27,21 @@ from nomad_pv_stability_measurements.file_reading.file_reading_utils import (
     file_format_from_path,
     is_in_institution_folder,
 )
+from nomad_pv_stability_measurements.project_data import (
+    PROJECT_DATA_ARCHIVE,
+    PROJECT_DATA_FILE,
+    TEMPLATE_FILE,
+    Spreadsheet,
+    clean_sample_id,
+    described_values,
+    entry_reference,
+    load_spreadsheet,
+    sample_entry_path,
+)
 from nomad_pv_stability_measurements.schema_packages.schema_package import (
     MEASUREMENT_KINDS,
+    ProjectData,
     StabilityFile,
-    StabilityUploadSummary,
 )
 
 #: How many bytes of the beginning of a file the `match_<kind>` functions see, for
@@ -41,13 +52,15 @@ HEAD_SIZE = 4096
 #: institution whose module sets no `TAIL_SIZE` of its own.
 TAIL_SIZE = 4096
 
-#: The endings of NOMAD archive files, such as ELN entries and the upload summary.
+#: The endings of NOMAD archive files, such as ELN entries and the project entry.
 #: These are processed by NOMAD itself and not registered.
 ARCHIVE_FILE_ENDINGS = ('.archive.json', '.archive.yaml', '.archive.yml')
 
-#: The names of an upload's summary file, at the upload's root. A user may supply
-#: any of them; a summary created automatically gets the first.
-SUMMARY_FILE_NAMES = (
+#: The names of the file of an upload's project entry, at the upload's root: the
+#: one the plugin creates, and those of the summaries of earlier versions, which an
+#: upload keeps as its project entry.
+PROJECT_ENTRY_FILES = (
+    PROJECT_DATA_ARCHIVE,
     'stability_upload.archive.json',
     'stability_upload.archive.yaml',
     'stability_upload.archive.yml',
@@ -56,10 +69,13 @@ SUMMARY_FILE_NAMES = (
 
 def is_registered(path: str) -> bool:
     """`True` if the file at `path`, a path within the upload, is registered: all
-    files except NOMAD archive files, hidden files, files in hidden folders, and
-    files whose name starts with `~`, which NOMAD never processes."""
+    files except NOMAD archive files, hidden files, files in hidden folders, files
+    whose name starts with `~`, which NOMAD never processes, and the project data
+    spreadsheet and its template, which the project entry reads."""
     names = PurePosixPath(path).parts
     if any(name.startswith('.') for name in names) or names[-1].startswith('~'):
+        return False
+    if names[-1] in (PROJECT_DATA_FILE, TEMPLATE_FILE):
         return False
     return not path.endswith(ARCHIVE_FILE_ENDINGS)
 
@@ -152,8 +168,9 @@ def register_file(
     starts.
 
     A file that belongs to no institution, by folder or email, is of kind `unknown`
-    and logged as an error, because no institution's code can read it. A file of an institution that
-    no function recognizes is of kind `unknown` and logged as a warning.
+    and logged as an error, because no institution's code can read it. A file of an
+    institution that no function recognizes is of kind `unknown` and logged as a
+    warning.
     """
     values = {'file': path, 'file_format': file_format_from_path(path)}
 
@@ -202,6 +219,7 @@ def register_file(
             values['end_time'] = end_time
         if provenance is not None:
             values['provenance'] = provenance
+        sample_id = clean_sample_id(sample_id)
         if sample_id is not None:
             values['sample_id'] = sample_id
         if sample_reference is not None:
@@ -216,34 +234,99 @@ def register_file(
     return values, {}
 
 
-def ensure_summary(archive: 'EntryArchive', logger: 'BoundLogger') -> None:
-    """Creates the upload's summary file, unless the upload has one, and has NOMAD
-    process it.
+class DescribedFileLogger:
+    """The logger for reading a file that the upload's project data describes:
+    warnings and errors become information, because the project data gives the
+    file's values."""
+
+    def __init__(self, logger: 'BoundLogger'):
+        self._logger = logger
+
+    def warning(self, *args, **kwargs):
+        self._logger.info(*args, **kwargs)
+
+    error = warning
+
+    def __getattr__(self, name):
+        return getattr(self._logger, name)
+
+
+def with_project_data(path: str, values: dict, spreadsheet: 'Spreadsheet') -> dict:
+    """`values`, the values of the file at `path` found by matching, with those that
+    the rows of the sheet `files` of the project data `spreadsheet` give for it,
+    which win field by field, and with a reference to the sample entry of the
+    file's `sample_id` if the sheet `samples` has it.
+
+    If the descriptions give a start but no end, and matching gave no end of its
+    own, the measurement ends when it starts, as for matching."""
+    described = described_values(path, spreadsheet.file_rows)
+    end_was_start = values.get('end_time') == values.get('start_time')
+    values = {**values, **described}
+    if 'end_time' not in described and end_was_start:
+        values.pop('end_time', None)
+        if values.get('start_time') is not None:
+            values['end_time'] = values['start_time']
+    if values.get('sample_id') is None:
+        values.pop('sample_id', None)
+    if values.get('sample_id') in spreadsheet.sample_ids:
+        values['sample'] = entry_reference(sample_entry_path(values['sample_id']))
+    return values
+
+
+def file_values(
+    path: str,
+    file: 'BinaryIO',
+    logger: 'BoundLogger',
+    email: str | None = None,
+    spreadsheet: 'Spreadsheet | None' = None,
+) -> dict:
+    """The values of the `StabilityFile` of the file at `path`, a path within the
+    upload, whose content `file` gives, uploaded by the user with the address
+    `email`: found by `register_file` and completed by the project data
+    `spreadsheet` with `with_project_data`.
+
+    The institution's module sets how much of the beginning and end of the file its
+    functions see. Problems of a file that the spreadsheet describes are logged as
+    information, because the spreadsheet gives its values."""
+    institution = institution_of(path, email)
+    content = read_head(file, getattr(institution, 'HEAD_SIZE', HEAD_SIZE))
+    tail = read_tail(file, getattr(institution, 'TAIL_SIZE', TAIL_SIZE))
+    if spreadsheet is not None and described_values(path, spreadsheet.file_rows):
+        logger = DescribedFileLogger(logger)
+    # The institution-specific `data` is not stored.
+    values, _data = register_file(path, content, tail, logger, email)
+    if spreadsheet is not None:
+        values = with_project_data(path, values, spreadsheet)
+    return values
+
+
+def ensure_project_data(archive: 'EntryArchive', logger: 'BoundLogger') -> None:
+    """Creates the upload's project entry `ProjectData`, unless the upload has one,
+    and has NOMAD process it.
 
     Only during NOMAD's processing of an upload, with a `ServerContext`. The files of
-    an upload are processed in parallel, so several may create the summary at once;
-    they write the same content, and NOMAD processes the summary again instead of
-    failing. A failure is logged as a warning and does not fail the file's entry."""
+    an upload are processed in parallel, so several may create it at once; they
+    write the same content, and NOMAD processes it again instead of failing. An
+    existing entry, which may hold edits, is never overwritten. A failure is logged
+    as a warning and does not fail the file's entry."""
     context = archive.m_context
     if not isinstance(context, ServerContext):
         return
-    if any(context.raw_path_exists(name) for name in SUMMARY_FILE_NAMES):
+    if any(context.raw_path_exists(name) for name in PROJECT_ENTRY_FILES):
         return
 
-    path = SUMMARY_FILE_NAMES[0]
+    path = PROJECT_DATA_ARCHIVE
     try:
         with context.raw_file(path, 'w') as file:
-            json.dump(
-                {'data': StabilityUploadSummary().m_to_dict(with_root_def=True)}, file
-            )
+            json.dump({'data': ProjectData().m_to_dict(with_root_def=True)}, file)
         context.process_updated_raw_file(path, allow_modify=True)
     except Exception as error:
-        logger.warning('could not create the upload summary', file=path, exc_info=error)
+        logger.warning('could not create the project data', file=path, exc_info=error)
 
 
 class StabilityFileParser(MatchingParser):
     """Makes one `StabilityFile` per file, filled by `register_file`, and
-    makes sure that the upload has a summary."""
+    makes sure that the upload has a project entry."""
 
     def parse(
         self,
@@ -258,16 +341,10 @@ class StabilityFileParser(MatchingParser):
         if archive.metadata is not None and archive.metadata.mainfile:
             path = archive.metadata.mainfile
 
-        # How much of the file the institution's functions see, as its module sets.
         email = uploader_email(archive)
-        institution = institution_of(path, email)
-        head_size = getattr(institution, 'HEAD_SIZE', HEAD_SIZE)
-        tail_size = getattr(institution, 'TAIL_SIZE', TAIL_SIZE)
+        spreadsheet = load_spreadsheet(archive.m_context)
         with open(mainfile, 'rb') as file:
-            content = read_head(file, head_size)
-            tail = read_tail(file, tail_size)
-        # The institution-specific `data` is not stored in the file's entry.
-        values, _data = register_file(path, content, tail, logger, email)
+            values = file_values(path, file, logger, email, spreadsheet)
         archive.data = StabilityFile(**values)
 
-        ensure_summary(archive, logger)
+        ensure_project_data(archive, logger)

@@ -16,6 +16,7 @@ from urllib.parse import urlencode
 
 import numpy as np
 from nomad.config import config
+from nomad.datamodel.context import ServerContext
 from nomad.datamodel.data import ArchiveSection, EntryData, Schema
 from nomad.datamodel.metainfo.annotations import (
     BrowserAdaptors,
@@ -31,15 +32,18 @@ from nomad.metainfo import (
     URL,
     Datetime,
     MEnum,
-    MetainfoReferenceError,
     Quantity,
     SchemaPackage,
     Section,
     SubSection,
 )
+from nomad.parsing.tabular import TableData
 from nomad.utils import generate_entry_id
 
 from nomad_pv_stability_measurements.file_reading import INSTITUTIONS
+from nomad_pv_stability_measurements.schema_packages.sample_schema import (
+    SolcarCellSample,
+)
 
 configuration = config.get_plugin_entry_point(
     'nomad_pv_stability_measurements.schema_packages:schema_package_entry_point'
@@ -133,7 +137,8 @@ PROVENANCES = {
 }
 
 
-#: The sample under which a summary lists the files whose sample is not known.
+#: The sample under which the project entry lists the files whose sample is not
+#: known.
 UNKNOWN_SAMPLE = 'Unknown'
 
 
@@ -142,8 +147,10 @@ class StabilityFile(EntryData):
     The entry made from one file of a stability upload, registered with what is
     known about it.
 
-    Values are stored as the institution's reading code provides them; this section
-    does not interpret file contents. Fields that nothing could determine stay empty.
+    The values come from the sheet `files` of the upload's project data
+    spreadsheet where a row matches the file, and otherwise from the institution's
+    reading code; this section does not interpret file contents. Fields that
+    nothing could determine stay empty.
     """
 
     file = Quantity(
@@ -157,8 +164,8 @@ class StabilityFile(EntryData):
         description="""
         Short name of the institution whose folder of the upload the file is in, or,
         for a file in no institution's folder, the institution of the uploader's
-        email domain. Its reading code determines the other values. Empty if neither
-        names an institution.
+        email domain. Its reading code determines the values that the project data
+        does not give. Empty if neither names an institution.
         """,
     )
 
@@ -166,8 +173,8 @@ class StabilityFile(EntryData):
         type=MEnum(*MEASUREMENT_KINDS),
         default='unknown',
         description="""
-        What was measured, as recognized by the institution's reading code. The same
-        file format can hold different kinds of measurements.
+        What was measured. The same file format can hold different kinds of
+        measurements.
         """,
     )
 
@@ -191,9 +198,8 @@ class StabilityFile(EntryData):
         type=Datetime,
         description="""
         When the measurement in this file finished, as an absolute time, with the
-        same time zone rule as `start_time`. Equal to `start_time` if the
-        institution's reading code gives no end, as for a measurement that takes
-        only seconds.
+        same time zone rule as `start_time`. Equal to `start_time` if nothing gives
+        an end, as for a measurement that takes only seconds.
         """,
     )
 
@@ -201,16 +207,16 @@ class StabilityFile(EntryData):
         type=MEnum(*PROVENANCES, m_descriptions=PROVENANCES),
         default='measured',
         description="""
-        Where the data of the file comes from, as given by the institution's reading
-        code; each value is described with the enumeration.
+        Where the data of the file comes from; each value is described with the
+        enumeration.
         """,
     )
 
     sample_id = Quantity(
         type=str,
         description="""
-        The identifier of the measured sample as the institution writes it. Empty if
-        the institution's reading code does not know it.
+        The identifier of the measured sample as the institution writes it, without
+        spaces at its start and end. Empty if nothing gives it.
         """,
     )
 
@@ -219,6 +225,15 @@ class StabilityFile(EntryData):
         description="""
         A URI identifying the sample: a NOMAD entry, an external database, or any
         other resolvable identifier.
+        """,
+    )
+
+    sample = Quantity(
+        type=SolcarCellSample,
+        description="""
+        The sample entry of the upload whose identifier is the file's `sample_id`,
+        made from the sheet `samples` of the project data spreadsheet. Empty without
+        such a sample.
         """,
     )
 
@@ -240,10 +255,28 @@ class StabilityFile(EntryData):
             self.duration = (end_time - self.start_time).total_seconds() / 3600
 
 
+def _tabular(column: str) -> dict:
+    """The tabular annotation that reads a quantity from the column `column` of the
+    first sheet of a spreadsheet."""
+    return {'name': column}
+
+
+def _eln(component: ELNComponentEnum) -> ELNAnnotation:
+    return ELNAnnotation(component=component)
+
+
+def _split_commas(values) -> list[str] | None:
+    """`values` with every value split at commas and stripped; `None` if empty."""
+    if values is None:
+        return None
+    items = [item.strip() for value in values for item in str(value).split(',')]
+    return [item for item in items if item] or None
+
+
 class StabilityFileReference(ArchiveSection):
     """
-    One file of a stability upload in its summary: the file's path and a reference
-    to the file's own entry, which holds what is known about it.
+    One file of a stability upload in its project entry: the file's path and a
+    reference to the file's own entry, which holds what is known about it.
 
     The reference is resolved only when it is followed, so it may be written before
     the file's entry exists.
@@ -282,21 +315,182 @@ class StabilitySampleGroup(ArchiveSection):
     )
 
 
-class StabilityUploadSummary(PlotSection, BaseSection, EntryData):
+class ProjectData(PlotSection, EntryData, TableData):
     """
-    All files of one stability upload, grouped by sample, with the institutions that
-    measured them and the proposal under which they were measured.
+    One stability upload as a project: the proposal as submitted in GATE
+    (READY-PV), the standards used and the samples, which can be edited, and an
+    overview of the upload's files, which is derived on every normalization: the
+    institutions, the files grouped by sample, a link to the app "Stability files",
+    and a timeline of when each sample was measured.
 
-    Its figure shows when each sample was measured: one row per sample, one dot per
-    file at the file's start time, coloured by measurement kind.
+    The plugin creates it for every upload. The editable part is filled from the
+    spreadsheet `data_file` while "fill archive from data file" is ticked: the first
+    sheet `project` gives the proposal, and the sheet `samples` writes the sample
+    entries of the upload. After that the values here hold, and edits stay until the
+    spreadsheet is imported again. The sheet `files` is read by the file entries
+    themselves; an import only checks it and reports its errors here.
+
+    The timeline has one row per sample and one line per file from its start to
+    its end, coloured by measurement kind.
     """
 
-    # An upload has no lab ID, and the time NOMAD fills in is only that of the
-    # first processing, so both are not shown.
-    m_def = Section(
-        a_display=SectionDisplayAnnotation(
-            visible=Filter(exclude=['lab_id', 'datetime'])
-        )
+    data_file = Quantity(
+        type=str,
+        description='The spreadsheet with the project data, in the upload.',
+        # Only the quantities of the first sheet; the other sheets are read by
+        # the plugin.
+        a_tabular_parser={
+            'mapping_options': [
+                {'mapping_mode': 'column', 'file_mode': 'current_entry', 'sections': []}
+            ]
+        },
+        a_browser=BrowserAnnotation(adaptor=BrowserAdaptors.RawFileAdaptor),
+        a_eln=_eln(ELNComponentEnum.FileEditQuantity),
+    )
+
+    proposal_number = Quantity(
+        type=str,
+        description='The number of the proposal in GATE (READY-PV).',
+        a_tabular=_tabular('proposal_number'),
+        a_eln=_eln(ELNComponentEnum.StringEditQuantity),
+    )
+    proposal = Quantity(
+        type=str,
+        description='A URI of the proposal under which these measurements were made.',
+        a_tabular=_tabular('proposal'),
+        a_eln=_eln(ELNComponentEnum.URLEditQuantity),
+    )
+    title = Quantity(
+        type=str,
+        description='GATE, general proposal data: title (max. 500 characters).',
+        a_tabular=_tabular('title'),
+        a_eln=_eln(ELNComponentEnum.StringEditQuantity),
+    )
+    abstract = Quantity(
+        type=str,
+        description='GATE, general proposal data: abstract (max. 1000 characters).',
+        a_tabular=_tabular('abstract'),
+        a_eln=_eln(ELNComponentEnum.RichTextEditQuantity),
+    )
+    main_research_area = Quantity(
+        type=str,
+        description='GATE, general proposal data: main research area.',
+        a_tabular=_tabular('main_research_area'),
+        a_eln=_eln(ELNComponentEnum.StringEditQuantity),
+    )
+    scientific_category = Quantity(
+        type=str,
+        description='GATE, general proposal data: scientific category.',
+        a_tabular=_tabular('scientific_category'),
+        a_eln=_eln(ELNComponentEnum.StringEditQuantity),
+    )
+    funding_requested = Quantity(
+        type=bool,
+        description='GATE, general proposal data: whether funding was requested.',
+        a_tabular=_tabular('funding_requested'),
+        a_eln=_eln(ELNComponentEnum.BoolEditQuantity),
+    )
+    proposer = Quantity(
+        type=str,
+        description='GATE: the proposer, who submitted the proposal.',
+        a_tabular=_tabular('proposer'),
+        a_eln=_eln(ELNComponentEnum.StringEditQuantity),
+    )
+    co_proposers = Quantity(
+        type=str,
+        shape=['*'],
+        description='GATE: the co-proposers; in the spreadsheet separated by commas.',
+        a_tabular=_tabular('co_proposers'),
+        a_eln=_eln(ELNComponentEnum.StringEditQuantity),
+    )
+    installation = Quantity(
+        type=str,
+        description="""
+        GATE, technical requirements: the installation (instrument) of the
+        proposal; one per proposal.
+        """,
+        a_tabular=_tabular('installation'),
+        a_eln=_eln(ELNComponentEnum.StringEditQuantity),
+    )
+    instrument_scientist = Quantity(
+        type=str,
+        description='GATE, technical requirements: the contacted instrument scientist.',
+        a_tabular=_tabular('instrument_scientist'),
+        a_eln=_eln(ELNComponentEnum.StringEditQuantity),
+    )
+    experiment_start = Quantity(
+        type=Datetime,
+        description="""
+        The start of the allocated experiment time, as ISO text, e.g. 2026-09-13;
+        without a time zone read as UTC.
+        """,
+        a_tabular=_tabular('experiment_start'),
+        a_eln=_eln(ELNComponentEnum.DateTimeEditQuantity),
+    )
+    experiment_end = Quantity(
+        type=Datetime,
+        description='The end of the allocated experiment time, as `experiment_start`.',
+        a_tabular=_tabular('experiment_end'),
+        a_eln=_eln(ELNComponentEnum.DateTimeEditQuantity),
+    )
+    proposal_file = Quantity(
+        type=str,
+        description="""
+        The proposal as PDF from GATE ("Preview proposal"), path in the upload.
+        """,
+        a_tabular=_tabular('proposal_file'),
+        a_browser=BrowserAnnotation(adaptor=BrowserAdaptors.RawFileAdaptor),
+        a_eln=_eln(ELNComponentEnum.FileEditQuantity),
+    )
+    scientific_case_file = Quantity(
+        type=str,
+        description="""
+        GATE, general proposal data: the scientific case and results expected (one
+        page PDF), path in the upload.
+        """,
+        a_tabular=_tabular('scientific_case_file'),
+        a_browser=BrowserAnnotation(adaptor=BrowserAdaptors.RawFileAdaptor),
+        a_eln=_eln(ELNComponentEnum.FileEditQuantity),
+    )
+    experimental_plan_file = Quantity(
+        type=str,
+        description="""
+        GATE, technical requirements: the experimental plan (one page PDF), path in
+        the upload.
+        """,
+        a_tabular=_tabular('experimental_plan_file'),
+        a_browser=BrowserAnnotation(adaptor=BrowserAdaptors.RawFileAdaptor),
+        a_eln=_eln(ELNComponentEnum.FileEditQuantity),
+    )
+    report_file = Quantity(
+        type=str,
+        description="""
+        GATE, after the experiment time: the first result PDF of the experimental
+        report, path in the upload.
+        """,
+        a_tabular=_tabular('report_file'),
+        a_browser=BrowserAnnotation(adaptor=BrowserAdaptors.RawFileAdaptor),
+        a_eln=_eln(ELNComponentEnum.FileEditQuantity),
+    )
+    standards = Quantity(
+        type=str,
+        shape=['*'],
+        description="""
+        The stability protocols the measurements follow, e.g. ISOS-L-1; in the
+        spreadsheet separated by commas.
+        """,
+        a_tabular=_tabular('standards'),
+        a_eln=_eln(ELNComponentEnum.StringEditQuantity),
+    )
+
+    samples = Quantity(
+        type=SolcarCellSample,
+        shape=['*'],
+        description="""
+        The sample entries of the project, written from the sheet `samples` on
+        every import.
+        """,
+        a_eln=_eln(ELNComponentEnum.ReferenceEditQuantity),
     )
 
     institutions = Quantity(
@@ -309,11 +503,6 @@ class StabilityUploadSummary(PlotSection, BaseSection, EntryData):
         replaced.
         """,
     )
-    proposal = Quantity(
-        type=str,
-        description='A URI of the proposal under which these measurements were made.',
-    )
-
     files_app = Quantity(
         type=URL,
         description="""
@@ -328,28 +517,76 @@ class StabilityUploadSummary(PlotSection, BaseSection, EntryData):
         description=f"""
         Every file of the upload, grouped by sample, ordered by sample identifier.
         Each file is in exactly one group; the files whose sample is not known are in
-        a last group `{UNKNOWN_SAMPLE}`. Derived from the files' entries; records
+        a last group `{UNKNOWN_SAMPLE}`. Derived from the files; records
         entered here are replaced.
         """,
     )
 
     def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
-        """Groups every registered file of the upload by the sample its entry names,
-        with a reference to the entry, and derives `institutions` from the files'
-        institution folders or else the uploader's email domain.
+        """Reads the spreadsheet if "fill archive from data file" is ticked: the
+        first sheet into the quantities here, the sheet `samples` into sample
+        entries, and the sheet `files` only to report its errors. Comma separated
+        lists are split. Sample entries are only written during NOMAD's processing.
+        Without `data_file`, the upload's `project_data.xlsx` is taken and imported.
 
-        `institutions` follows from the upload's file paths and its uploader alone.
-        The groups read the files' entries, which NOMAD processes before the summary;
-        a file without sample, or whose entry cannot be read, is in the group
+        Then derives the overview: every registered file of the upload grouped by
+        its sample, with a reference to the file's entry, `institutions` from the
+        files' institution folders or else the uploader's email domain, and the
+        timeline. A file without sample, or that cannot be read, is in the group
         `UNKNOWN_SAMPLE`."""
+        # Imported here, because the module imports this one.
+        from nomad_pv_stability_measurements.project_data import (
+            PROJECT_DATA_FILE,
+            file_rows,
+            read_sheets,
+            write_sample_entries,
+        )
+
+        context = archive.m_context
+        server = isinstance(context, ServerContext)
+        if (
+            self.data_file is None
+            and server
+            and context.raw_path_exists(PROJECT_DATA_FILE)
+        ):
+            self.data_file = PROJECT_DATA_FILE
+            self.fill_archive_from_datafile = True
+        importing = bool(self.fill_archive_from_datafile and self.data_file)
+        if importing:
+            # NOMAD's tabular parser fills only empty quantities of the first sheet;
+            # an import replaces them all.
+            for quantity in self.m_def.all_quantities.values():
+                tabular = quantity.m_get_annotations('tabular')
+                if tabular is not None and '/' not in tabular.name:
+                    self.m_set(quantity, None)
         super().normalize(archive, logger)
 
-        # Imported here, because the parser module imports this module.
+        self.standards = _split_commas(self.standards)
+        self.co_proposers = _split_commas(self.co_proposers)
+
+        if importing and server:
+            data = read_sheets(context, self.data_file)
+            file_rows(data, logger)
+            self.samples = write_sample_entries(context, data, logger)
+
+        self._derive_overview(archive, logger)
+
+    def _derive_overview(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
+        """Derives the institutions, the file groups, the link to the app and the
+        timeline from the upload's files.
+
+        Each file's values are found exactly as for its own entry, by
+        `file_values`, so the overview does not depend on whether the files'
+        entries are processed yet. Problems of single files are reported by their
+        entries, not here."""
+        # Imported here, because these modules import this one.
         from nomad_pv_stability_measurements.parsers.stability_file_parser import (
+            file_values,
             institution_of,
             is_registered,
             uploader_email,
         )
+        from nomad_pv_stability_measurements.project_data import load_spreadsheet
 
         upload_files = getattr(archive.m_context, 'upload_files', None)
         upload_id = archive.metadata.upload_id if archive.metadata else None
@@ -376,23 +613,16 @@ class StabilityUploadSummary(PlotSection, BaseSection, EntryData):
             f'{generate_entry_id(upload_id, path)}#data'
             for path in paths
         }
-        # A reference is followed through the archive it is part of, so the records
-        # are attached to the summary before their entries are read.
-        self.file_groups = [
-            StabilitySampleGroup(
-                files=[
-                    StabilityFileReference(file=path, entry=reference)
-                    for path, reference in references.items()
-                ]
-            )
-        ]
+        spreadsheet = load_spreadsheet(archive.m_context)
         entries = {}
-        for record in self.file_groups[0].files:
+        for path in paths:
             try:
-                entries[record.file] = record.entry.m_resolved()
-            except MetainfoReferenceError:
-                logger.warning('Could not read the entry of a file.', file=record.file)
-                entries[record.file] = None
+                with upload_files.raw_file(path, 'rb') as file:
+                    values = file_values(path, file, _QUIET, email, spreadsheet)
+                entries[path] = StabilityFile(**values)
+            except Exception as error:
+                logger.warning('could not read a file', file=path, exc_info=error)
+                entries[path] = None
 
         by_sample: dict[str, StabilitySampleGroup] = {}
         for path in paths:
@@ -422,6 +652,32 @@ class StabilityUploadSummary(PlotSection, BaseSection, EntryData):
             self.file_groups.append(group)
 
         self.figures = _measurement_timeline(self.file_groups, entries)
+
+
+class _QuietLogger:
+    """A logger that drops every message."""
+
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: None
+
+
+_QUIET = _QuietLogger()
+
+
+class StabilityUploadSummary(ProjectData, BaseSection):
+    """
+    Deprecated: the earlier summary of a stability upload, now part of
+    `ProjectData`. Kept so that stored summaries, whose files are
+    `stability_upload.archive.json`, `.yaml` or `.yml`, still load; such an upload
+    keeps its summary as its project entry. New uploads get `ProjectData`.
+    """
+
+    # The quantities of the base section were never filled; not shown.
+    m_def = Section(
+        a_display=SectionDisplayAnnotation(
+            visible=Filter(exclude=['lab_id', 'datetime', 'name', 'description'])
+        )
+    )
 
 
 #: Sizes in the measurement timeline, in pixels: of the circle at a file's start,
