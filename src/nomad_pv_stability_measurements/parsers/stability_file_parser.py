@@ -1,4 +1,5 @@
-"""Registering every file of a stability upload as a `StabilityFile`."""
+"""Registering every file of a stability upload as a `StabilityActivity` with
+the file as its output."""
 
 import json
 from typing import TYPE_CHECKING
@@ -31,7 +32,10 @@ from nomad_pv_stability_measurements.schema_packages.schema_package import (
     STABILITY_FILE_TYPES,
     ProjectData,
 )
-from nomad_pv_stability_measurements.schema_packages.utils import stability_file
+from nomad_pv_stability_measurements.schema_packages.utils import (
+    stability_activity,
+    unique_lab_id,
+)
 
 if TYPE_CHECKING:
     from typing import BinaryIO
@@ -53,7 +57,7 @@ def register_file(
 
     Returns two values:
 
-    - the values of the `StabilityFile` quantities, without those nobody knows;
+    - the values of the `StabilityActivity` quantities and of its file, without those nobody knows;
     - the `data` dict that the institution's `match_<kind>` function returned.
 
     The institution is given by `institution_of`: by the file's folder, or else by
@@ -110,8 +114,8 @@ def register_file(
         start_time, end_time, provenance, sample_id, sample_reference, data = result
         found = {
             'stability_file_type': kind,
-            'start_time': start_time,
-            'end_time': start_time if end_time is None else end_time,
+            'datetime': start_time,
+            'datetime_end': start_time if end_time is None else end_time,
             'provenance': provenance,
             'sample_id': clean_sample_id(sample_id),
             'sample_reference': sample_reference,
@@ -127,24 +131,29 @@ def register_file(
     return values, {}
 
 
-def with_project_data(values: dict, described: dict, sample_ids: frozenset) -> dict:
+def with_project_data(
+    values: dict, described: dict, spreadsheet: 'Spreadsheet'
+) -> dict:
     """`values`, the values of a file found by matching, with `described`, those that
-    the rows of the sheet `files` give for it, which win field by field, and with a
-    reference to the sample entry of the file's `sample_id` if the sheet `samples`
-    (`sample_ids`) has it.
+    the rows of the sheet `files` of the project data `spreadsheet` give for it,
+    which win field by field; with a reference to the sample entry of the file's
+    `sample_id` if the sheet `samples` has it; and with the file's lab ID,
+    `<proposal_number>:<path>`, if the sheet `project` gives a proposal number.
 
     If the descriptions give a start but no end, and matching gave no end of its
     own, the file's data end when they start, as for matching."""
-    end_was_start = values.get('end_time') == values.get('start_time')
+    end_was_start = values.get('datetime_end') == values.get('datetime')
     values = {**values, **described}
-    if 'end_time' not in described and end_was_start:
-        values.pop('end_time', None)
-        if values.get('start_time') is not None:
-            values['end_time'] = values['start_time']
+    if 'datetime_end' not in described and end_was_start:
+        values.pop('datetime_end', None)
+        if values.get('datetime') is not None:
+            values['datetime_end'] = values['datetime']
     if values.get('sample_id') is None:
         values.pop('sample_id', None)
-    elif values['sample_id'] in sample_ids:
+    elif values['sample_id'] in spreadsheet.sample_ids:
         values['sample'] = sample_entry_reference(values['sample_id'])
+    if spreadsheet.proposal_number:
+        values['lab_id'] = unique_lab_id(spreadsheet.proposal_number, values['file'])
     return values
 
 
@@ -154,11 +163,12 @@ def file_values(
     logger: 'BoundLogger',
     email: str | None = None,
     spreadsheet: 'Spreadsheet | None' = None,
-) -> dict:
-    """The values of the `StabilityFile` of the file at `path`, a path within the
+) -> tuple[dict, dict]:
+    """The values of the `StabilityActivity` of the file at `path`, a path within the
     upload, whose content `file` gives, uploaded by the user with the address
     `email`: found by `register_file` and completed by the project data
-    `spreadsheet` with `with_project_data`.
+    `spreadsheet` with `with_project_data`; and the `data` that the institution's
+    `match_<kind>` function returned.
 
     The institution's module sets how much of the beginning and end of the file its
     functions see. Problems of a file that the spreadsheet describes are logged as
@@ -171,11 +181,10 @@ def file_values(
         described = described_values(path, spreadsheet.file_rows)
     if described:
         logger = DescribedFileLogger(logger)
-    # The institution-specific `data` is not stored.
-    values, _data = register_file(path, content, tail, logger, email)
-    if spreadsheet is None:
-        return values
-    return with_project_data(values, described, spreadsheet.sample_ids)
+    values, data = register_file(path, content, tail, logger, email)
+    if spreadsheet is not None:
+        values = with_project_data(values, described, spreadsheet)
+    return values, data
 
 
 def ensure_project_data(archive: 'EntryArchive', logger: 'BoundLogger') -> None:
@@ -203,7 +212,7 @@ def ensure_project_data(archive: 'EntryArchive', logger: 'BoundLogger') -> None:
 
 
 class StabilityFileParser(MatchingParser):
-    """Makes one `StabilityFile` per file, filled by `register_file`, and
+    """Makes one `StabilityActivity` per file, filled by `register_file`, and
     makes sure that the upload has a project entry."""
 
     def parse(
@@ -222,7 +231,7 @@ class StabilityFileParser(MatchingParser):
         email = uploader_email(archive)
         spreadsheet = load_spreadsheet(archive.m_context)
         with open(mainfile, 'rb') as file:
-            values = file_values(path, file, logger, email, spreadsheet)
-        archive.data = stability_file(values)
+            values, data = file_values(path, file, logger, email, spreadsheet)
+        archive.data = stability_activity(values, data)
 
         ensure_project_data(archive, logger)

@@ -18,14 +18,20 @@ from nomad.datamodel.metainfo.annotations import (
     BrowserAdaptors,
     BrowserAnnotation,
     ELNComponentEnum,
+    Filter,
+    SectionDisplayAnnotation,
 )
+from nomad.datamodel.metainfo.basesections.v2 import Activity, ActivityResult
 from nomad.datamodel.metainfo.plot import PlotSection
+from nomad.datamodel.metainfo.workflow import Link
+from nomad.datamodel.results import Results
 from nomad.metainfo import (
     URL,
     Datetime,
     MEnum,
     Quantity,
     SchemaPackage,
+    Section,
     SubSection,
 )
 from nomad.parsing.tabular import TableData
@@ -48,8 +54,9 @@ from nomad_pv_stability_measurements.schema_packages.utils import (
     group_of,
     sample_series,
     split_commas,
-    stability_file,
+    stability_activity,
     tabular,
+    unique_lab_id,
 )
 
 m_package = SchemaPackage()
@@ -148,6 +155,7 @@ class SampleIdentity(ArchiveSection):
         The identifier of the sample as the institution writes it, without spaces at
         its start and end. Empty if nothing gives it.
         """,
+        a_eln=eln(ELNComponentEnum.StringEditQuantity),
     )
     entry = Quantity(
         type=SolarCellSample,
@@ -155,6 +163,7 @@ class SampleIdentity(ArchiveSection):
         The sample entry of the upload whose identifier is `sample_id`, made from the
         sheet `samples` of the project data spreadsheet. Empty without such a sample.
         """,
+        a_eln=eln(ELNComponentEnum.ReferenceEditQuantity),
     )
     external_reference = Quantity(
         type=URL,
@@ -162,24 +171,59 @@ class SampleIdentity(ArchiveSection):
         Where the sample is described outside the upload: an external database, a
         DOI, or a NOMAD entry of another upload.
         """,
+        a_eln=eln(ELNComponentEnum.URLEditQuantity),
     )
 
 
-class StabilityFile(EntryData):
+class StabilityFile(ActivityResult):
     """
-    The entry made from one file of a stability upload, registered with what is
-    known about it.
+    A file of a stability upload, the output of the activity that produced its data
+    (`StabilityActivity`): where it is in the upload and how it is stored. Its
+    `name` is its path.
+    """
+
+    path = Quantity(
+        type=str,
+        description='The path of the file, relative to the upload.',
+        a_browser=BrowserAnnotation(adaptor=BrowserAdaptors.RawFileAdaptor),
+    )
+    file_format = Quantity(
+        type=MEnum(*FILE_FORMATS),
+        default='unknown',
+        description='How the file is stored, as given by its file name extension.',
+    )
+
+
+class StabilityActivity(Activity):
+    """
+    The entry made from one file of a stability upload: the activity that produced
+    the file's data, registered with what is known about it, and the file itself as
+    its output (`file`).
 
     The values come from the sheet `files` of the upload's project data
     spreadsheet where a row matches the file, and otherwise from the institution's
     reading code; this section does not interpret file contents. Fields that
     nothing could determine stay empty.
+
+    As an activity, it stands for whatever produced the file's data, measured,
+    simulated or from elsewhere: `datetime` and `datetime_end` are the period the
+    data cover. Its `name`, which also names the entry, is the file's path in the
+    upload; its `lab_id`, unique in NOMAD, is `<proposal_number>:<path>`, or
+    `<upload_id>:<path>` without a proposal number; its `method`, by which NOMAD's
+    apps find it, is its `stability_file_type`; its `description` comes from the
+    sheet `files`. The activity's `location` and `steps` are not used. Its workflow
+    has the file as output and the sample entry, where known, as input.
     """
 
-    file = Quantity(
-        type=str,
-        description='The path of the file, relative to the upload.',
-        a_browser=BrowserAnnotation(adaptor=BrowserAdaptors.RawFileAdaptor),
+    m_def = Section(
+        a_display=SectionDisplayAnnotation(
+            visible=Filter(exclude=['location', 'steps', 'method'])
+        )
+    )
+
+    file = SubSection(
+        section_def=StabilityFile,
+        description='The file that holds the data, the output of the activity.',
     )
 
     institution = Quantity(
@@ -203,13 +247,7 @@ class StabilityFile(EntryData):
         """,
     )
 
-    file_format = Quantity(
-        type=MEnum(*FILE_FORMATS),
-        default='unknown',
-        description='How the file is stored, as given by its file name extension.',
-    )
-
-    start_time = Quantity(
+    datetime = Quantity(
         type=Datetime,
         description="""
         The start of the period of the stability test that the file's data cover, as
@@ -223,12 +261,12 @@ class StabilityFile(EntryData):
         """,
     )
 
-    end_time = Quantity(
+    datetime_end = Quantity(
         type=Datetime,
         description="""
         The end of the period that the file's data cover, as an absolute time, with
-        the same rules as `start_time`. Equal to `start_time` if nothing gives an end,
-        as for data taken within seconds, such as a J-V scan.
+        the same rules as `datetime`. Equal to `datetime` if nothing gives an end, as
+        for data taken within seconds, such as a J-V scan.
         """,
     )
 
@@ -250,47 +288,50 @@ class StabilityFile(EntryData):
         type=np.float64,
         unit='hour',
         description="""
-        How long a period the file's data cover. With a `start_time`, derived on
-        normalization from `start_time` to `end_time`, zero without an end time.
-        Without a `start_time`, as given, e.g. in the sheet `files`: for a simulation
-        over 1000 h of model time, 1000; empty if nothing gives it.
+        How long a period the file's data cover. With a `datetime`, derived on
+        normalization from `datetime` to `datetime_end`, zero without an end. Without
+        a `datetime`, as given, e.g. in the sheet `files`: for a simulation over
+        1000 h of model time, 1000; empty if nothing gives it.
         """,
     )
 
     def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
+        """Names the section, and so the entry, and the file after the file's path,
+        gives it the
+        lab ID `<upload_id>:<path>` where the project data gave none, takes the
+        method from the stability file type, and derives the `duration` from the
+        times."""
+        path = self.file.path if self.file is not None else None
+        if path is not None:
+            self.name = self.file.name = path
+            upload_id = archive.metadata.upload_id if archive.metadata else None
+            if self.lab_id is None and upload_id is not None:
+                self.lab_id = unique_lab_id(upload_id, path)
+        self.method = self.stability_file_type
+        # The base section writes into `results`, which it expects to exist.
+        if archive.results is None:
+            archive.results = Results()
         super().normalize(archive, logger)
-        if self.start_time is not None:
-            end_time = self.end_time or self.start_time
-            self.duration = (end_time - self.start_time).total_seconds() / 3600
+        if self.datetime is not None:
+            end = self.datetime_end or self.datetime
+            self.duration = (end - self.datetime).total_seconds() / 3600
+
+        if path is not None:
+            archive.workflow2.outputs = [Link(name=path, section=self.file)]
+        identity = self.sample_identity
+        if identity is not None and identity.entry is not None:
+            archive.workflow2.inputs = [
+                Link(name=identity.sample_id, section=identity.entry)
+            ]
 
 
-class StabilityFileReference(ArchiveSection):
-    """
-    One file of a stability upload in its project entry: the file's path and a
-    reference to the file's own entry, which holds what is known about it.
-
-    The reference is resolved only when it is followed, so it may be written before
-    the file's entry exists.
-    """
-
-    file = Quantity(
-        type=str,
-        description='The path of the file, relative to the upload.',
-        a_browser=BrowserAnnotation(adaptor=BrowserAdaptors.RawFileAdaptor),
-    )
-    entry = Quantity(
-        type=StabilityFile,
-        description='The entry made from the file.',
-    )
-
-
-class StabilityFileGroup(ArchiveSection):
-    """A group of files of a stability upload, ordered by when their data start:
-    either the series of one sample, its stability test, with the sample and the
-    standards applied to it; or the files that belong to no sample, of a general type
-    (`GENERAL_FILE_TYPES`, e.g. `Setup logs`, and `GENERAL_GROUP`) or of an unknown
-    sample (`UNKNOWN_SAMPLE`), without sample and standards. What is known about each
-    file is in its entry."""
+class StabilityActivityGroup(ArchiveSection):
+    """A group of the activities of a stability upload, one per file, ordered by when
+    their data start: either the series of one sample, its stability test, with the
+    sample and the standards applied to it; or the activities that belong to no
+    sample, of a general type (`GENERAL_FILE_TYPES`, e.g. `Setup logs`, and
+    `GENERAL_GROUP`) or of an unknown sample (`UNKNOWN_SAMPLE`), without sample and
+    standards."""
 
     name = Quantity(
         type=str,
@@ -318,12 +359,13 @@ class StabilityFileGroup(ArchiveSection):
         series.
         """,
     )
-    files = SubSection(
-        section_def=StabilityFileReference,
-        repeats=True,
+    activities = Quantity(
+        type=StabilityActivity,
+        shape=['*'],
         description="""
-        One record per file of the group, ordered by start time. Files without a
-        start time come last.
+        The activities of the group, each with its file, ordered by the start of
+        their data; those without a start come last. A reference is resolved only
+        when it is followed, so it may be written before the activity's entry exists.
         """,
     )
 
@@ -372,7 +414,11 @@ class ProjectData(PlotSection, EntryData, TableData):
 
     proposal_number = Quantity(
         type=str,
-        description='The number of the proposal in GATE (READY-PV).',
+        description="""
+        The number of the proposal in GATE (READY-PV). Set once: it makes the samples'
+        lab IDs, `<proposal_number>:<sample_id>`, unique in NOMAD, so it must not
+        change afterwards.
+        """,
         a_tabular=tabular('proposal_number'),
         a_eln=eln(ELNComponentEnum.StringEditQuantity),
     )
@@ -495,14 +541,15 @@ class ProjectData(PlotSection, EntryData, TableData):
         a_browser=BrowserAnnotation(adaptor=BrowserAdaptors.RawFileAdaptor),
         a_eln=eln(ELNComponentEnum.FileEditQuantity),
     )
-    samples = Quantity(
-        type=SolarCellSample,
-        shape=['*'],
+    samples = SubSection(
+        section_def=SampleIdentity,
+        repeats=True,
         description="""
-        The sample entries of the project, written from the sheet `samples` on
-        every import.
+        The samples of the project, with their sample entries, written from the sheet
+        `samples` on every import. Each sample entry's lab ID is
+        `<proposal_number>:<sample_id>`, or `<upload_id>:<sample_id>` without a
+        proposal number.
         """,
-        a_eln=eln(ELNComponentEnum.ReferenceEditQuantity),
     )
 
     institutions = Quantity(
@@ -517,7 +564,7 @@ class ProjectData(PlotSection, EntryData, TableData):
     )
 
     sample_series = SubSection(
-        section_def=StabilityFileGroup,
+        section_def=StabilityActivityGroup,
         repeats=True,
         description="""
         One series per sample, with the standards applied to it, ordered by sample
@@ -527,7 +574,7 @@ class ProjectData(PlotSection, EntryData, TableData):
         """,
     )
     general_groups = SubSection(
-        section_def=StabilityFileGroup,
+        section_def=StabilityActivityGroup,
         repeats=True,
         description=f"""
         The files that belong to no sample: one group per general type of files
@@ -547,8 +594,9 @@ class ProjectData(PlotSection, EntryData, TableData):
         taken and imported.
 
         Then derives the overview: every registered file of the upload in a series,
-        of its sample or of its general kind (`GENERAL_FILE_TYPES`), with a reference
-        to the file's entry, `institutions` from the files' institution folders or
+        of its sample or of its general kind (`GENERAL_FILE_TYPES`), as a reference
+        to the entry of its activity, `institutions` from the files'
+        institution folders or
         else the uploader's email domain, and the timeline. A file of no general kind
         without sample, or that cannot be read, is in the series `UNKNOWN_SAMPLE`."""
         # Imported here, because the module imports this one.
@@ -570,6 +618,7 @@ class ProjectData(PlotSection, EntryData, TableData):
             self.data_file = PROJECT_DATA_FILE
             self.fill_archive_from_datafile = True
         importing = bool(self.fill_archive_from_datafile and self.data_file)
+        previous_proposal_number = self.proposal_number
         if importing:
             # NOMAD's tabular parser fills only empty quantities of the first sheet;
             # an import replaces them all.
@@ -581,11 +630,19 @@ class ProjectData(PlotSection, EntryData, TableData):
 
         self.co_proposers = split_commas(self.co_proposers)
 
+        if importing and previous_proposal_number not in (None, self.proposal_number):
+            logger.warning(
+                "the proposal number changed; the samples' lab IDs change with it",
+                previous=previous_proposal_number,
+                proposal_number=self.proposal_number,
+            )
+
         standards = None
         if importing and server:
             data = read_sheets(context, self.data_file)
             file_rows(data, logger)
-            self.samples = write_sample_entries(context, data, logger)
+            lab_id_prefix = self.proposal_number or archive.metadata.upload_id
+            self.samples = write_sample_entries(context, data, lab_id_prefix, logger)
             standards = sample_standards(data)
 
         self._derive_overview(archive, logger, standards)
@@ -638,63 +695,61 @@ class ProjectData(PlotSection, EntryData, TableData):
             institution.INSTITUTION for institution in institutions if institution
         )
 
-        # An entry's id follows from its upload and its file, so the reference can be
-        # written whether or not the entry exists yet.
-        references = {
-            path: f'../uploads/{upload_id}/archive/'
-            f'{generate_entry_id(upload_id, path)}#data'
-            for path in paths
-        }
         spreadsheet = load_spreadsheet(archive.m_context)
         entries = {}
         for path in paths:
             try:
                 with upload_files.raw_file(path, 'rb') as file:
-                    values = file_values(path, file, QUIET, email, spreadsheet)
-                entries[path] = stability_file(values)
+                    values, data = file_values(path, file, QUIET, email, spreadsheet)
+                entries[path] = stability_activity(values, data)
             except Exception as error:
                 logger.warning('could not read a file', file=path, exc_info=error)
                 entries[path] = None
 
         applied = applied_standards(self.sample_series, standards, logger)
         sample_ids = spreadsheet.sample_ids if spreadsheet else frozenset()
-        groups: dict[tuple, StabilityFileGroup] = {
+        groups: dict[tuple, StabilityActivityGroup] = {
             (0, sample_id): sample_series(sample_id, sample_ids)
             for sample_id in applied
         }
+        members: dict[tuple, list[str]] = {key: [] for key in groups}
         for path in paths:
             key, name = group_of(entries[path])
             if key not in groups:
                 groups[key] = (
                     sample_series(name, sample_ids)
                     if key[0] == 0
-                    else StabilityFileGroup(name=name)
+                    else StabilityActivityGroup(name=name)
                 )
-            group = groups[key]
-            group.files.append(
-                StabilityFileReference(file=path, entry=references[path])
-            )
+            members.setdefault(key, []).append(path)
 
-        def earliest_first(record):
-            entry = entries[record.file]
-            start_time = entry.start_time if entry else None
+        def earliest_first(path):
+            entry = entries[path]
+            start = entry.datetime if entry else None
             # Put missing times last and use the file path to break ties.
-            return (start_time is None, start_time, record.file)
+            return (start is None, start, path)
 
-        for group in groups.values():
-            group.files = sorted(group.files, key=earliest_first)
+        for key, group in groups.items():
+            members[key].sort(key=earliest_first)
+            # An entry's id follows from its upload and its file, so the reference
+            # can be written whether or not the entry exists yet.
+            group.activities = [
+                f'../uploads/{upload_id}/archive/'
+                f'{generate_entry_id(upload_id, path)}#data'
+                for path in members[key]
+            ]
+        ordered = sorted(groups)
         # The key's first element tells a sample's series (0) from the others.
-        self.sample_series = [groups[key] for key in sorted(groups) if key[0] == 0]
-        self.general_groups = [groups[key] for key in sorted(groups) if key[0] != 0]
+        self.sample_series = [groups[key] for key in ordered if key[0] == 0]
+        self.general_groups = [groups[key] for key in ordered if key[0] != 0]
         for series in self.sample_series:
             series.applied_standards = applied.get(series.sample_identity.sample_id, [])
             for standard in series.applied_standards:
                 # Added after NOMAD normalized the sub-sections, so normalized here.
                 standard.normalize(archive, logger)
 
-        self.figures = file_timeline(
-            [*self.sample_series, *self.general_groups], entries
-        )
+        rows = [(groups[key].name, members[key]) for key in ordered]
+        self.figures = file_timeline(rows, entries)
 
 
 m_package.__init_metainfo__()

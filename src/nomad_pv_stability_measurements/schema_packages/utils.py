@@ -16,8 +16,8 @@ if TYPE_CHECKING:
     from structlog.stdlib import BoundLogger
 
     from nomad_pv_stability_measurements.schema_packages.schema_package import (
-        StabilityFile,
-        StabilityFileGroup,
+        StabilityActivity,
+        StabilityActivityGroup,
     )
 
 
@@ -42,6 +42,14 @@ GENERAL_FILE_TYPES = {
     'metadata': GENERAL_GROUP,
     'measurement_protocol': GENERAL_GROUP,
 }
+
+
+def unique_lab_id(prefix: str, identifier: str) -> str:
+    """A lab ID unique in NOMAD: `identifier`, unique within its project, after
+    `prefix`, the project's proposal number, or the upload's ID without one. E.g.
+    `RPV-261-00001-EF:RPV-S1` for a sample, `RPV-261-00001-EF:UNITOV/run_1/001_JV.txt`
+    for a file."""
+    return f'{prefix}:{identifier}'
 
 
 def tabular(column: str) -> dict:
@@ -183,16 +191,28 @@ def applied_standards(
 # The file entries and their groups.
 
 
-def stability_file(values: dict) -> 'StabilityFile':
-    """The file entry with `values` as the file parser finds them: its quantities,
-    and `sample_id`, `sample` (the reference to the sample entry) and
-    `sample_reference`, which make its `sample_identity`."""
+def stability_activity(values: dict, data: dict | None = None) -> 'StabilityActivity':
+    """The entry of a file with `values` as the file parser finds them: the
+    quantities of the activity; `file` and `file_format`, which make its `file`; and
+    `sample_id`, `sample` (the reference to the sample entry) and `sample_reference`,
+    which make its `sample_identity`.
+
+    `data` is what the institution's `match_<kind>` function read from the file
+    beyond these values. It is not stored yet; it is passed here so that the entry
+    can become a section of its own kind that holds it, chosen here alone, without
+    changes to the parser or to the institutions' reading code."""
     from nomad_pv_stability_measurements.schema_packages.schema_package import (
         SampleIdentity,
+        StabilityActivity,
         StabilityFile,
     )
 
     values = dict(values)
+    path = values.pop('file', None)
+    if path is not None:
+        values['file'] = StabilityFile(
+            path=path, file_format=values.pop('file_format', 'unknown')
+        )
     identity = {
         'sample_id': values.pop('sample_id', None),
         'entry': values.pop('sample', None),
@@ -201,10 +221,10 @@ def stability_file(values: dict) -> 'StabilityFile':
     identity = {key: value for key, value in identity.items() if value is not None}
     if identity:
         values['sample_identity'] = SampleIdentity(**identity)
-    return StabilityFile(**values)
+    return StabilityActivity(**values)
 
 
-def sample_series(sample_id: str, sample_ids: frozenset) -> 'StabilityFileGroup':
+def sample_series(sample_id: str, sample_ids: frozenset) -> 'StabilityActivityGroup':
     """The series of the sample `sample_id`, referencing its sample entry if the
     sheet `samples` (`sample_ids`) has it."""
     from nomad_pv_stability_measurements.parsers.project_data_utils import (
@@ -212,16 +232,16 @@ def sample_series(sample_id: str, sample_ids: frozenset) -> 'StabilityFileGroup'
     )
     from nomad_pv_stability_measurements.schema_packages.schema_package import (
         SampleIdentity,
-        StabilityFileGroup,
+        StabilityActivityGroup,
     )
 
     identity = SampleIdentity(sample_id=sample_id)
     if sample_id in sample_ids:
         identity.entry = sample_entry_reference(sample_id)
-    return StabilityFileGroup(name=sample_id, sample_identity=identity)
+    return StabilityActivityGroup(name=sample_id, sample_identity=identity)
 
 
-def group_of(entry: 'StabilityFile | None') -> tuple[tuple, str]:
+def group_of(entry: 'StabilityActivity | None') -> tuple[tuple, str]:
     """The group of a file's entry, as a key that orders the groups (samples, then
     the general groups, then the unknown sample) and the group's name."""
     general = list(dict.fromkeys(GENERAL_FILE_TYPES.values()))

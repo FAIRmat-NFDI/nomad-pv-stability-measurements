@@ -40,9 +40,12 @@ from nomad_pv_stability_measurements.schema_packages.sample_schema import (
 from nomad_pv_stability_measurements.schema_packages.schema_package import (
     ProjectData,
     SampleIdentity,
-    StabilityFile,
+    StabilityActivity,
 )
-from nomad_pv_stability_measurements.schema_packages.utils import split_commas
+from nomad_pv_stability_measurements.schema_packages.utils import (
+    split_commas,
+    unique_lab_id,
+)
 
 if TYPE_CHECKING:
     from structlog.stdlib import BoundLogger
@@ -107,16 +110,17 @@ standards.
 """
 
 #: The columns of the sheet `files`: the path pattern, then quantities of
-#: `StabilityFile` that a row can give for the files it matches.
+#: `StabilityActivity` that a row can give for the files it matches.
 FILE_COLUMNS = (
     'files',
     'stability_file_type',
-    'start_time',
-    'end_time',
+    'datetime',
+    'datetime_end',
     'duration',
     'provenance',
     'sample_id',
     'sample_reference',
+    'description',
 )
 
 #: Earlier headers of columns of the sheet `files`, read under their current name.
@@ -201,6 +205,14 @@ def sample_entry_path(sample_id: str, part: str = '') -> str:
     return f'{SAMPLES_FOLDER}/{name}{suffix}.archive.json'
 
 
+def sample_lab_id(prefix: str, sample_id: str, part: str = '') -> str:
+    """The lab ID of the sample `sample_id`, or of one of its parts, by
+    `unique_lab_id`. E.g. `RPV-261-00001-EF:RPV-S1` and
+    `RPV-261-00001-EF:RPV-S1-substrate`."""
+    suffix = f'-{part}' if part else ''
+    return unique_lab_id(prefix, f'{sample_id}{suffix}')
+
+
 def sample_entry_reference(sample_id: str, part: str = '') -> str:
     """A reference to the data of the entry of the sample `sample_id`, or of one of
     its parts, in the same upload."""
@@ -247,16 +259,16 @@ class FileRow(NamedTuple):
 
 def file_column_quantity(name: str):
     """The quantity that the column `name` of the sheet `files` fills: one of
-    `StabilityFile`, or of its `SampleIdentity`."""
+    `StabilityActivity`, or of its `SampleIdentity`."""
     if name in SAMPLE_IDENTITY_COLUMNS:
         return SampleIdentity.m_def.all_quantities[SAMPLE_IDENTITY_COLUMNS[name]]
-    return StabilityFile.m_def.all_quantities[name]
+    return StabilityActivity.m_def.all_quantities[name]
 
 
 def file_rows(data: dict, logger: 'BoundLogger | None' = None) -> list[FileRow]:
     """The readable rows of the sheet `files` in `data`, the sheets as
     `read_sheets` reads them. Unknown columns, invalid patterns and values that a
-    `StabilityFile` does not accept are logged as errors naming row and column, if
+    `StabilityActivity` does not accept are logged as errors naming row and column, if
     a `logger` is given, and left out: an unknown column or a cell, or a row with an
     invalid pattern."""
 
@@ -320,10 +332,12 @@ def described_values(path: str, rows: list[FileRow]) -> dict:
 
 class Spreadsheet(NamedTuple):
     """What a file entry reads from the project data spreadsheet: the rows of the
-    sheet `files`, and the identifiers of the samples of the sheet `samples`."""
+    sheet `files`, the identifiers of the samples of the sheet `samples`, and the
+    proposal number of the sheet `project`, `None` if it gives none."""
 
     file_rows: list[FileRow]
     sample_ids: frozenset[str]
+    proposal_number: str | None = None
 
 
 def load_spreadsheet(context) -> Spreadsheet | None:
@@ -350,7 +364,10 @@ def _read_spreadsheet(os_path: str, _size: int, _mtime: int) -> Spreadsheet:
         clean_sample_id(row.get('sample_id'))
         for row in read_sheet_rows(data, 'samples')
     }
-    return Spreadsheet(file_rows(data), frozenset(sample_ids - {None}))
+    project = read_sheet_rows(data, 'project')
+    cell = project[0].get('proposal_number') if project else None
+    proposal_number = None if is_empty(cell) else str(cell).strip()
+    return Spreadsheet(file_rows(data), frozenset(sample_ids - {None}), proposal_number)
 
 
 # The sheet `samples`.
@@ -518,9 +535,7 @@ def sample_sections(
         encapsulation = Encapsulation(
             name=f'{sample_id} encapsulation',
             samples=[
-                CompositeSystemReference(
-                    lab_id=sample_id, reference=sample_entry_reference(sample_id)
-                )
+                CompositeSystemReference(reference=sample_entry_reference(sample_id))
             ],
             **values['encapsulation'],
         )
@@ -541,13 +556,15 @@ def sample_standards(data: dict) -> dict[str, list[str]]:
     return standards
 
 
-def write_sample_entries(context, data: dict, logger: 'BoundLogger') -> list:
+def write_sample_entries(
+    context, data: dict, lab_id_prefix: str, logger: 'BoundLogger'
+) -> list[SampleIdentity]:
     """Writes the entries of the samples of the sheet `samples` in `data` into the
-    upload's folder `samples` and has NOMAD process them; returns a reference to
-    each sample entry written. Entries of earlier imports are overwritten; rows that
-    cannot be read, and repeated sample identifiers, are logged as errors and left
-    out."""
-    references = []
+    upload's folder `samples`, with lab IDs made with `lab_id_prefix`, and has NOMAD
+    process them; returns the identity of each sample written, with a reference to
+    its entry. Entries of earlier imports are overwritten; rows that cannot be read,
+    and repeated sample identifiers, are logged as errors and left out."""
+    identities = []
     seen_paths: dict[str, str] = {}
     if not context.raw_path_exists(SAMPLES_FOLDER):
         context.upload_files.raw_create_directory(SAMPLES_FOLDER)
@@ -576,14 +593,19 @@ def write_sample_entries(context, data: dict, logger: 'BoundLogger') -> list:
         for part, section in parts.items():
             if section is None:
                 continue
+            section.lab_id = sample_lab_id(lab_id_prefix, sample_id, part)
+            if part == 'encapsulation':
+                section.samples[0].lab_id = sample.lab_id
             entry_path = sample_entry_path(sample_id, part)
             with context.raw_file(entry_path, 'w') as file:
                 json.dump(
                     {'data': section.m_to_dict(with_root_def=True)}, file, indent=2
                 )
             context.process_updated_raw_file(entry_path, allow_modify=True)
-        references.append(sample_entry_reference(sample_id))
-    return references
+        identities.append(
+            SampleIdentity(sample_id=sample_id, entry=sample_entry_reference(sample_id))
+        )
+    return identities
 
 
 # The template.

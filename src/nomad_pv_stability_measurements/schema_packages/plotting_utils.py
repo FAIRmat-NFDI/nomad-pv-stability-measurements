@@ -3,16 +3,10 @@ line per file, from the start to the end of the period its data cover."""
 
 from datetime import datetime, timezone, tzinfo
 from pathlib import PurePosixPath
-from typing import TYPE_CHECKING
 
 from nomad.datamodel.metainfo.plot import PlotlyFigure
 
 from nomad_pv_stability_measurements.file_reading import INSTITUTIONS
-
-if TYPE_CHECKING:
-    from nomad_pv_stability_measurements.schema_packages.schema_package import (
-        StabilityFileGroup,
-    )
 
 #: Sizes in the timeline of the files, in pixels: of the circle at a file's start,
 #: of the smaller triangle at its end, which hides behind the circle when zoomed
@@ -60,22 +54,22 @@ TIMELINE_START_SYMBOL = 'circle'
 TIMELINE_END_SYMBOL = 'triangle-up'
 
 #: The legend entries that explain the start and end markers.
-TIMELINE_START_LEGEND = 'start_time'
-TIMELINE_END_LEGEND = 'end_time'
+TIMELINE_START_LEGEND = 'start (datetime)'
+TIMELINE_END_LEGEND = 'end (datetime_end)'
 
 #: The hover text of a file's markers.
 TIMELINE_HOVER = (
     '<b>%{customdata[0]}</b><br>'
     'series: %{customdata[1]}<br>'
-    'start_time: %{customdata[2]}<br>'
-    'end_time: %{customdata[3]}<br>'
+    'datetime: %{customdata[2]}<br>'
+    'datetime_end: %{customdata[3]}<br>'
     # `<extra></extra>` leaves out the box with the trace's name.
     'type: %{customdata[4]}<extra></extra>'
 )
 
 
 def file_timeline(
-    file_groups: list['StabilityFileGroup'], entries: dict
+    rows: list[tuple[str, list[str]]], entries: dict
 ) -> list[PlotlyFigure]:
     """A figure with one row per group and one line per file from the start to the
     end of the period its data cover, coloured by stability file type. Hovering over
@@ -96,7 +90,8 @@ def file_timeline(
 
     Files without start time are not plotted, and a group without such files, the
     group `UNKNOWN_SAMPLE` included, has no row. Without any plottable file, no
-    figure. Rows keep the order of `file_groups`, top to bottom. Each kind has the
+    figure. `rows` gives each group's name and its files' paths, in the order of
+    the rows, top to bottom; `entries` the activity of each path. Each kind has the
     colour of `TIMELINE_KIND_COLORS`, the same in every upload. An entry made before
     end times existed ends when it starts. Times are in the zone given by
     `timeline_time_zone`."""
@@ -108,18 +103,18 @@ def file_timeline(
         STABILITY_FILE_TYPES,
     )
 
-    def plottable(record):
-        entry = entries[record.file]
-        return entry is not None and entry.start_time is not None
+    def plottable(path):
+        entry = entries[path]
+        return entry is not None and entry.datetime is not None
 
-    rows = [group for group in file_groups if any(map(plottable, group.files))]
-    row_names = [group.name for group in rows]
+    rows = [(name, paths) for name, paths in rows if any(map(plottable, paths))]
+    row_names = [name for name, _ in rows]
     files_by_kind: dict[str, list] = {}
-    for row, group in enumerate(rows):
-        for record in filter(plottable, group.files):
-            entry = entries[record.file]
+    for row, (name, paths) in enumerate(rows):
+        for path in filter(plottable, paths):
+            entry = entries[path]
             files_by_kind.setdefault(entry.stability_file_type or 'unknown', []).append(
-                (row, group.name, record.file, entry)
+                (row, name, path, entry)
             )
     if not files_by_kind:
         return []
@@ -148,8 +143,8 @@ def file_timeline(
         # The start and the end of each file, with its hover text.
         start_points, end_points = [], []
         for row, series_name, path, entry in files_by_kind[kind]:
-            start = local(entry.start_time)
-            end = local(entry.end_time or entry.start_time)
+            start = local(entry.datetime)
+            end = local(entry.datetime_end or entry.datetime)
             text = (
                 PurePosixPath(path).name,
                 series_name,

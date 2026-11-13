@@ -18,12 +18,13 @@ A small, made-up stability project that shows how an upload is processed:
   `weather_information`).
 - The project entry `project_data.archive.json` is created automatically. It
   imports the spreadsheet, writes one sample entry per sample into the folder
-  `samples`, and puts the files into groups: one series per sample, with the
-  standards applied to it (column `standard` of the sheet `samples`);
-  `Setup logs` (the climate chamber) and `Weather information` (the weather
-  station); `General` for files that belong to no sample, such as this README; and
-  `Unknown` for files about a sample that name none. It plots the period that each
-  file's data cover.
+  `samples`, each with a lab ID unique in NOMAD, `<proposal_number>:<sample_id>`
+  (here `RPV-261-00001-EF:RPV-S1`), and puts the files into groups: one series per
+  sample, with the standards applied to it (column `standard` of the sheet
+  `samples`); `Setup logs` (the climate chamber) and `Weather information` (the
+  weather station); `General` for files that belong to no sample, such as this
+  README; and `Unknown` for files about a sample that name none. It plots the
+  period that each file's data cover.
 
 Edit the project data in NOMAD, or tick "fill archive from data file" in the
 project entry to import the spreadsheet again. Values for the files are changed in

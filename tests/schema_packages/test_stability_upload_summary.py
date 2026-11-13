@@ -2,14 +2,14 @@ import re
 
 from nomad import utils
 from nomad.datamodel import EntryArchive, EntryMetadata, User
+from nomad.utils import generate_entry_id
 
 from nomad_pv_stability_measurements.parsers import (
     stability_file_parser_entry_point,
 )
 from nomad_pv_stability_measurements.schema_packages.schema_package import (
     ProjectData,
-    StabilityFileGroup,
-    StabilityFileReference,
+    StabilityActivityGroup,
 )
 
 UNITOV_JV = (
@@ -42,15 +42,16 @@ def normalize(upload, files: dict[str, str], summary: ProjectData):
     summary.normalize(archive, utils.get_logger(__name__))
 
 
-def records(summary: ProjectData) -> list[StabilityFileReference]:
-    """The file records of all sample groups of `summary`, ordered by file path."""
+def activities(summary: ProjectData) -> list:
+    """The activities of all groups of `summary`, ordered by the path of their
+    file."""
     return sorted(
         (
-            record
+            reference.m_resolved()
             for group in [*summary.sample_series, *summary.general_groups]
-            for record in group.files
+            for reference in group.activities
         ),
-        key=lambda record: record.file,
+        key=lambda activity: activity.file.path,
     )
 
 
@@ -58,8 +59,8 @@ def test_summary_references_the_entry_of_every_file(staging_upload):
     summary = ProjectData(
         proposal='https://example.org/proposals/42',
         general_groups=[
-            StabilityFileGroup(
-                files=[StabilityFileReference(file='UNITOV/removed.txt')]
+            StabilityActivityGroup(
+                activities=['../upload/archive/mainfile/UNITOV/removed.txt#data']
             )
         ],
     )
@@ -77,21 +78,24 @@ def test_summary_references_the_entry_of_every_file(staging_upload):
         summary,
     )
 
-    assert [record.file for record in records(summary)] == [
+    assert [activity.file.path for activity in activities(summary)] == [
         'UNITOV/run_1/001_JV.txt',
         'UNITOV/run_1/plot.pdf',
     ]
     assert summary.institutions == ['UNITOV']
     assert summary.proposal == 'https://example.org/proposals/42'
 
-    # Following a reference gives the entry of that file.
-    jv, pdf = (record.entry for record in records(summary))
-    assert (jv.file, jv.stability_file_type, jv.sample_identity.sample_id) == (
+    # Following a reference gives the activity of that file.
+    jv, pdf = activities(summary)
+    assert (jv.file.path, jv.stability_file_type, jv.sample_identity.sample_id) == (
         'UNITOV/run_1/001_JV.txt',
         'jv',
         '3C_C1_1',
     )
-    assert (pdf.file, pdf.stability_file_type) == ('UNITOV/run_1/plot.pdf', 'unknown')
+    assert (pdf.file.path, pdf.stability_file_type) == (
+        'UNITOV/run_1/plot.pdf',
+        'unknown',
+    )
 
 
 def test_summary_names_every_institution_of_the_upload(staging_upload):
@@ -107,7 +111,7 @@ def test_summary_names_every_institution_of_the_upload(staging_upload):
     )
 
     assert summary.institutions == ['HZB', 'UNITOV']
-    assert [record.entry.institution for record in records(summary)] == [
+    assert [activity.institution for activity in activities(summary)] == [
         'HZB',
         'UNITOV',
         None,
@@ -126,7 +130,7 @@ def test_summary_names_the_uploaders_institution_for_files_in_no_folder(
     )
 
     assert summary.institutions == ['HZB', 'UNITOV']
-    assert [record.entry.institution for record in records(summary)] == [
+    assert [activity.institution for activity in activities(summary)] == [
         'HZB',
         'UNITOV',
     ]
@@ -152,8 +156,17 @@ def test_summary_does_not_need_the_entries_of_the_files(staging_upload):
     normalize(staging_upload, {}, summary)
 
     assert summary.institutions == ['HZB', 'UNITOV']
+
+    # The references name the entries the files will have, by their ids.
+    def activity_of(path):
+        entry_id = generate_entry_id(staging_upload.upload_id, path)
+        return f'../uploads/{staging_upload.upload_id}/archive/{entry_id}#data'
+
     assert [
-        (group.name, [record.file for record in group.files])
+        (group.name, [activity.m_proxy_value for activity in group.activities])
         for group in [*summary.sample_series, *summary.general_groups]
-    ] == [('3C_C1_1', ['UNITOV/run_1/001_JV.txt']), ('Unknown', ['HZB/jv_001.csv'])]
+    ] == [
+        ('3C_C1_1', [activity_of('UNITOV/run_1/001_JV.txt')]),
+        ('Unknown', [activity_of('HZB/jv_001.csv')]),
+    ]
     assert len(summary.figures) == 1

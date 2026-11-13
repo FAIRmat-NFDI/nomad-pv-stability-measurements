@@ -98,7 +98,7 @@ def test_project_data_is_read_from_the_spreadsheet(staging_upload, tmp_path):
                 'files': 'HZB/simulation/*.csv',
                 'stability_file_type': 'jv',
                 'provenance': 'simulated',
-                'start_time': '2026-01-05T10:00:00+01:00',
+                'datetime': '2026-01-05T10:00:00+01:00',
                 'sample_id': ' S1 ',
             },
             {'files': '../outside/*', 'stability_file_type': 'jv'},
@@ -185,10 +185,10 @@ def test_files_stored_or_described_as_measurement_kind_keep_their_type(
 ):
     """`stability_file_type` was called `measurement_kind`."""
     from nomad_pv_stability_measurements.schema_packages.schema_package import (
-        StabilityFile,
+        StabilityActivity,
     )
 
-    assert StabilityFile.m_from_dict(
+    assert StabilityActivity.m_from_dict(
         {'measurement_kind': 'jv'}
     ).stability_file_type == ('jv')
 
@@ -250,11 +250,14 @@ def test_files_that_belong_to_no_sample_form_general_groups(staging_upload, tmp_
     project = project_data(staging_upload)
 
     assert [
-        (each.sample_identity.sample_id, [record.file for record in each.files])
+        (
+            each.sample_identity.sample_id,
+            [activity.file.path for activity in each.activities],
+        )
         for each in project.sample_series
     ] == [('S1', ['UNITOV/run_1/001_JV.txt'])]
     assert [
-        (each.name, [record.file for record in each.files])
+        (each.name, [activity.file.path for activity in each.activities])
         for each in project.general_groups
     ] == [
         ('Setup logs', ['env/chamber.csv', 'env/sim.csv']),
@@ -346,13 +349,13 @@ def test_samples_become_entries_with_their_layer_stack(staging_upload, tmp_path)
     )
     process(staging_upload, path, {})
     samples = {
-        sample.m_resolved().lab_id: sample
+        sample.sample_id: sample.entry.m_resolved()
         for sample in project_data(staging_upload).samples
     }
 
     assert sorted(samples) == ['S1', 'S2']
-    s1 = samples['S1'].m_resolved()
-    assert (s1.lab_id, s1.architecture, s1.number_of_junctions) == ('S1', 'nip', 1)
+    s1 = samples['S1']
+    assert (s1.architecture, s1.number_of_junctions) == ('nip', 1)
     substrate = s1.substrate.m_resolved()
     assert substrate.active_area.to('cm**2').magnitude == pytest.approx(0.1)
     # Derived from active and dead area.
@@ -363,7 +366,7 @@ def test_samples_become_entries_with_their_layer_stack(staging_upload, tmp_path)
     ]
     assert layers == [('SnO2', 30), ('MAPbI3', 500), ('Au', pytest.approx(80))]
 
-    s2 = samples['S2'].m_resolved()
+    s2 = samples['S2']
     assert s2.module_configuration.is_module is True
     # Only the encapsulated device has an encapsulation entry.
     assert staging_upload.context.raw_path_exists(
@@ -372,6 +375,42 @@ def test_samples_become_entries_with_their_layer_stack(staging_upload, tmp_path)
     assert not staging_upload.context.raw_path_exists(
         'samples/S2_encapsulation.archive.json'
     )
+
+
+def test_sample_lab_ids_are_unique_by_the_proposal_number(staging_upload, tmp_path):
+    process(staging_upload, spreadsheet(tmp_path, PROJECT, samples=[ENCAPSULATED]), {})
+    [identity] = project_data(staging_upload).samples
+    sample = identity.entry.m_resolved()
+
+    # The sample keeps the identifier its files use; the lab ID adds the proposal.
+    assert (sample.sample_id, sample.lab_id) == ('S1', 'RPV-261-00001-EF:S1')
+    assert sample.substrate.m_resolved().lab_id == 'RPV-261-00001-EF:S1-substrate'
+
+
+def test_without_proposal_number_the_upload_makes_the_lab_ids_unique(
+    staging_upload, tmp_path
+):
+    project = {**PROJECT, 'proposal_number': None}
+    process(staging_upload, spreadsheet(tmp_path, project, samples=[ENCAPSULATED]), {})
+    [identity] = project_data(staging_upload).samples
+
+    lab_id = identity.entry.m_resolved().lab_id
+    assert lab_id == f'{staging_upload.upload_id}:S1'
+
+
+def test_a_changed_proposal_number_is_reported(staging_upload, tmp_path):
+    process(staging_upload, spreadsheet(tmp_path, PROJECT, samples=[ENCAPSULATED]), {})
+    project = project_data(staging_upload)
+    project.fill_archive_from_datafile = True
+    changed = {**PROJECT, 'proposal_number': 'RPV-261-00002-EF'}
+    with staging_upload.context.raw_file('project_data.xlsx', 'wb') as file:
+        file.write(spreadsheet(tmp_path, changed, samples=[ENCAPSULATED]).read_bytes())
+    with capture_logs() as logs:
+        save(staging_upload, 'project_data.archive.json', project)
+
+    assert [log['previous'] for log in logs if 'previous' in log] == [
+        'RPV-261-00001-EF'
+    ]
 
 
 def test_unreadable_sample_rows_are_reported(staging_upload, tmp_path):
@@ -392,7 +431,7 @@ def test_unreadable_sample_rows_are_reported(staging_upload, tmp_path):
 
     # The incomplete block is left out, the other rows of S1 are read.
     samples = project_data(staging_upload).samples
-    assert [sample.m_resolved().lab_id for sample in samples] == ['S1', 'S3']
+    assert [sample.sample_id for sample in samples] == ['S1', 'S3']
     errors = [
         (log['row'], log['column']) for log in logs if log['log_level'] == 'error'
     ]
@@ -410,8 +449,9 @@ def test_file_entries_take_the_project_data_first(staging_upload, tmp_path):
                 'files': 'HZB/simulation/*.csv',
                 'stability_file_type': 'jv',
                 'provenance': 'simulated',
-                'start_time': '2026-01-05T10:00:00+01:00',
+                'datetime': '2026-01-05T10:00:00+01:00',
                 'sample_id': 'S1',
+                'description': 'Drift-diffusion simulation of the fresh cell.',
             },
         ],
         samples=[{'sample_id': 'S1'}, {'sample_id': 's2'}],
@@ -426,18 +466,18 @@ def test_file_entries_take_the_project_data_first(staging_upload, tmp_path):
         },
     )
     entries = {
-        record.file: record.entry.m_resolved()
+        activity.file.path: activity.m_resolved()
         for group in [*project.sample_series, *project.general_groups]
-        for record in group.files
+        for activity in group.activities
     }
 
     measured = entries['UNITOV/run_1/001_JV.txt']
     # Matching gives kind, start and sample; the project data the provenance.
     assert (measured.stability_file_type, measured.provenance) == ('jv', 'reference')
-    assert measured.start_time == datetime(
-        2023, 10, 19, 16, 34, 18, tzinfo=timezone.utc
-    )
-    assert measured.sample_identity.entry.m_resolved().lab_id == 'S1'
+    assert measured.datetime == datetime(2023, 10, 19, 16, 34, 18, tzinfo=timezone.utc)
+    assert measured.sample_identity.entry.m_resolved().sample_id == 'S1'
+    # Unique in NOMAD: the proposal number and the path, which runs do not share.
+    assert measured.lab_id == 'RPV-261-00001-EF:UNITOV/run_1/001_JV.txt'
     # A later row overrides an earlier one; the identifier differs in case.
     other = entries['UNITOV/run_2/001_JV.txt']
     identity = other.sample_identity
@@ -449,7 +489,8 @@ def test_file_entries_take_the_project_data_first(staging_upload, tmp_path):
     # A file that no reading code recognizes is described completely.
     simulated = entries['HZB/simulation/jv.csv']
     assert (simulated.stability_file_type, simulated.provenance) == ('jv', 'simulated')
-    assert simulated.end_time == simulated.start_time
+    assert simulated.datetime_end == simulated.datetime
+    assert simulated.description == 'Drift-diffusion simulation of the fresh cell.'
 
     assert project.proposal == PROJECT['proposal']
     # Neither the spreadsheet nor the project entry or samples are files of it.
@@ -502,21 +543,21 @@ def test_the_example_upload_is_processed_without_problems(staging_upload):
 
     assert [log for log in logs if log['log_level'] in ('warning', 'error')] == []
     entries = {
-        record.file: record.entry.m_resolved()
+        activity.file.path: activity.m_resolved()
         for group in [*project.sample_series, *project.general_groups]
-        for record in group.files
+        for activity in group.activities
     }
     assert sorted(entries) == sorted(files)
     simulated = entries['HZB/simulation/jv_simulated.csv']
     assert (simulated.stability_file_type, simulated.provenance) == ('jv', 'simulated')
     # A simulation over model time has no times, only the length it covers.
     model = entries['simulation/degradation_model.csv']
-    assert (model.start_time, model.duration.to('hour').magnitude) == (None, 1000)
+    assert (model.datetime, model.duration.to('hour').magnitude) == (None, 1000)
     # Every UNITOV file is linked to the sample entry of its device.
     for path, entry in entries.items():
         if path.startswith('UNITOV/'):
             identity = entry.sample_identity
-            assert identity.entry.m_resolved().lab_id == identity.sample_id
+            assert identity.entry.m_resolved().sample_id == identity.sample_id
     assert applied_standards(project) == {
         'RPV-S1': [('ISOS-L-1', 'MPP', 'ISOS-L-1')],
         'RPV-S2': [('ISOS-L-1', 'MPP', 'ISOS-L-1')],
@@ -528,5 +569,6 @@ def test_the_example_upload_is_processed_without_problems(staging_upload):
     ]
     # The series of a sample references its sample entry.
     assert [
-        each.sample_identity.entry.m_resolved().lab_id for each in project.sample_series
+        each.sample_identity.entry.m_resolved().sample_id
+        for each in project.sample_series
     ] == ['RPV-S1', 'RPV-S2']

@@ -15,8 +15,8 @@ from nomad.config.models.ui import (
 )
 
 #: The section whose entries the app lists: one per file of a stability upload.
-STABILITY_FILE = (
-    'nomad_pv_stability_measurements.schema_packages.schema_package.StabilityFile'
+STABILITY_ACTIVITY = (
+    'nomad_pv_stability_measurements.schema_packages.schema_package.StabilityActivity'
 )
 
 
@@ -25,9 +25,9 @@ WIDTHS = {'xxl': 36, 'xl': 30, 'lg': 24, 'md': 18, 'sm': 12}
 
 
 def quantity(name: str) -> str:
-    """The search quantity of the `StabilityFile` quantity at the path `name`, e.g.
-    `start_time` or `sample_identity.sample_id`."""
-    return f'data.{name}#{STABILITY_FILE}'
+    """The search quantity of the `StabilityActivity` quantity at the path `name`,
+    e.g. `datetime`, `file.path` or `sample_identity.sample_id`."""
+    return f'data.{name}#{STABILITY_ACTIVITY}'
 
 
 stability_files_app = App(
@@ -43,10 +43,10 @@ stability_files_app = App(
     sample, or by selecting a range in the histograms; open a file's entry from the
     table.
     """,
-    filters_locked={'section_defs.definition_qualified_name': [STABILITY_FILE]},
-    search_quantities=SearchQuantities(include=[f'*#{STABILITY_FILE}']),
+    filters_locked={'section_defs.definition_qualified_name': [STABILITY_ACTIVITY]},
+    search_quantities=SearchQuantities(include=[f'*#{STABILITY_ACTIVITY}']),
     columns=[
-        Column(quantity=quantity('file'), label='File', selected=True),
+        Column(quantity=quantity('file.path'), label='File', selected=True),
         Column(
             quantity=quantity('sample_identity.sample_id'),
             label='Sample',
@@ -57,7 +57,7 @@ stability_files_app = App(
             label='File type',
             selected=True,
         ),
-        Column(quantity=quantity('start_time'), label='Start', selected=True),
+        Column(quantity=quantity('datetime'), label='Start', selected=True),
         Column(
             quantity=quantity('duration'),
             label='Duration',
@@ -67,8 +67,8 @@ stability_files_app = App(
         ),
         Column(quantity=quantity('institution'), label='Institution', selected=True),
         Column(quantity='upload_name', label='Upload', selected=True),
-        Column(quantity=quantity('end_time'), label='End'),
-        Column(quantity=quantity('file_format'), label='Format'),
+        Column(quantity=quantity('datetime_end'), label='End'),
+        Column(quantity=quantity('file.file_format'), label='Format'),
         Column(quantity=quantity('provenance'), label='Provenance'),
         Column(
             quantity=quantity('sample_identity.external_reference'),
@@ -88,7 +88,7 @@ stability_files_app = App(
             ),
             MenuItemTerms(search_quantity=quantity('institution'), title='Institution'),
             MenuItemTerms(search_quantity=quantity('provenance'), title='Provenance'),
-            MenuItemHistogram(x={'search_quantity': quantity('start_time')}),
+            MenuItemHistogram(x={'search_quantity': quantity('datetime')}),
             MenuItemHistogram(x={'search_quantity': quantity('duration')}),
         ],
     ),
@@ -96,7 +96,7 @@ stability_files_app = App(
         widgets=[
             WidgetHistogram(
                 title='Files over time',
-                x=Axis(search_quantity=quantity('start_time'), title='Start'),
+                x=Axis(search_quantity=quantity('datetime'), title='Start'),
                 n_bins=100,
                 autorange=True,
                 show_input=False,
