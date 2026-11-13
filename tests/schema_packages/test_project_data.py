@@ -182,6 +182,34 @@ def test_each_sample_gets_the_standards_of_its_row(staging_upload, tmp_path):
     assert [log['standard'] for log in logs if 'standard' in log] == ['ISOS-X-9']
 
 
+def test_the_projects_external_references_are_read_from_their_sheet(
+    staging_upload, tmp_path
+):
+    references = [
+        'https://doi.org/10.5281/zenodo.1234567',
+        None,
+        'zenodo.org/records/1234567',
+        'https://example.org/repository/rpv',
+    ]
+    path = spreadsheet(tmp_path, PROJECT)
+    workbook = openpyxl.load_workbook(path)
+    for row, url in enumerate(references, start=2):
+        workbook['references'].cell(row=row, column=1, value=url)
+    workbook.save(path)
+    with capture_logs() as logs:
+        process(staging_upload, path, {})
+
+    # In their order; an empty row is skipped, a cell that is no URL reported.
+    assert project_data(staging_upload).external_references == [
+        'https://doi.org/10.5281/zenodo.1234567',
+        'https://example.org/repository/rpv',
+    ]
+    errors = [
+        (log['row'], log['column']) for log in logs if log['log_level'] == 'error'
+    ]
+    assert errors == [(4, 'url')]
+
+
 def test_files_stored_or_described_as_measurement_kind_keep_their_type(
     staging_upload, tmp_path
 ):
@@ -582,6 +610,10 @@ def test_the_example_upload_is_processed_without_problems(staging_upload):
         if path.startswith('UNITOV/'):
             identity = entry.sample_identity
             assert identity.entry.m_resolved().sample_id == identity.sample_id
+    assert project.external_references == [
+        'https://example.org/zenodo/records/rpv-261-00001-ef',
+        'https://example.org/git/ready-pv/rpv-261-00001-ef',
+    ]
     assert applied_standards(project) == {
         'RPV-S1': [('ISOS-L-1', 'MPP', 'ISOS-L-1')],
         'RPV-S2': [('ISOS-L-1', 'MPP', 'ISOS-L-1')],

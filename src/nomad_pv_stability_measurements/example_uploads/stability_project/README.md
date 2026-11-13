@@ -3,7 +3,8 @@
 A small, made-up stability project that shows how an upload is processed:
 
 - `project_data.xlsx` holds the proposal (as submitted in GATE), two samples with
-  their layer stacks, and values for the files.
+  their layer stacks, values for the files, and the URLs of a data set and a
+  repository linked to the project (sheet `references`).
 - `UNITOV/run_1` holds J-V, MPP tracking, parameter and IPCE files of both samples
   in the format of the UNITOV stations; each file becomes an entry linked to its
   sample.

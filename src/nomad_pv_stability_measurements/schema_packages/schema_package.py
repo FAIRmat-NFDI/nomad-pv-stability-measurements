@@ -541,6 +541,16 @@ class ProjectData(PlotSection, EntryData, TableData):
         a_browser=BrowserAnnotation(adaptor=BrowserAdaptors.RawFileAdaptor),
         a_eln=eln(ELNComponentEnum.FileEditQuantity),
     )
+    external_references = Quantity(
+        type=URL,
+        shape=['*'],
+        description="""
+        URLs of databases or repositories linked to the project, e.g. a data set on
+        Zenodo or a DOI link. Written from the sheet `references` on every import;
+        edits stay until the next import.
+        """,
+        a_eln=eln(ELNComponentEnum.URLEditQuantity),
+    )
     samples = SubSection(
         section_def=SampleIdentity,
         repeats=True,
@@ -587,7 +597,7 @@ class ProjectData(PlotSection, EntryData, TableData):
     def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
         """Reads the spreadsheet if "fill archive from data file" is ticked: the
         first sheet into the quantities here, the sheet `samples` into sample
-        entries, and the sheet `files` only to report its errors. Comma separated
+        entries, the sheet `references` into `external_references`, and the sheet `files` only to report its errors. Comma separated
         lists are split. On import, the column `standard` of the sheet `samples` gives
         each sample's applied standards. Sample entries are only written during
         NOMAD's processing. Without `data_file`, the upload's `project_data.xlsx` is
@@ -603,6 +613,7 @@ class ProjectData(PlotSection, EntryData, TableData):
         from nomad_pv_stability_measurements.parsers.project_data_utils import (
             PROJECT_DATA_FILE,
             file_rows,
+            project_references,
             read_sheets,
             sample_standards,
             write_sample_entries,
@@ -643,6 +654,7 @@ class ProjectData(PlotSection, EntryData, TableData):
             file_rows(data, logger)
             lab_id_prefix = self.proposal_number or archive.metadata.upload_id
             self.samples = write_sample_entries(context, data, lab_id_prefix, logger)
+            self.external_references = project_references(data, logger)
             standards = sample_standards(data)
 
         self._derive_overview(archive, logger, standards)

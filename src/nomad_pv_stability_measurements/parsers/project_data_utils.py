@@ -1,18 +1,21 @@
 """The project data spreadsheet `project_data.xlsx` of a stability upload, with the
 proposal, the samples and values for the files.
 
-The spreadsheet has three sheets:
+The spreadsheet has four sheets:
 
 - `project` (the first sheet): one row with the proposal as submitted in GATE
   (READY-PV);
 - `files`: one row per path pattern with values for the files it matches;
+- `references`: one URL per row, of a database or repository linked to the
+  project;
 - `samples`: one row per sample with the standards applied to it, and its layer
   stack at the end in blocks of three columns `LayerN: layer_type`,
   `LayerN: layer_material_name` and `LayerN: layer_thickness [nm]`.
 
 NOMAD's tabular parser fills `ProjectData` from the sheet `project`. The sheet
 `samples` is read here when `ProjectData` imports the spreadsheet, and each row
-becomes sample entries of the upload. The sheet `files` is read here by every file
+becomes sample entries of the upload; so is the sheet `references`, into
+`ProjectData.external_references`. The sheet `files` is read here by every file
 entry when it is parsed.
 """
 
@@ -25,6 +28,7 @@ from fnmatch import fnmatchcase
 from functools import lru_cache
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, NamedTuple
+from urllib.parse import urlsplit
 
 from nomad.datamodel.metainfo.basesections import CompositeSystemReference
 from nomad.parsing.tabular import read_table_data
@@ -548,6 +552,40 @@ def sample_sections(
     return sample_id, sample, substrate, encapsulation
 
 
+#: The sheet of the URLs linked to the project, and its only column.
+REFERENCES_SHEET = 'references'
+REFERENCE_COLUMN = 'url'
+
+#: What the column `url` of the sheet `references` holds, for the template.
+REFERENCE_COLUMN_DESCRIPTION = """
+A URL of a database or repository linked to the project, e.g. a data set on Zenodo
+or a DOI link: https://doi.org/10.5281/zenodo.1234567. One per row.
+"""
+
+
+def project_references(data: dict, logger: 'BoundLogger') -> list[str]:
+    """The URLs of the sheet `references` in `data`, in their order. A cell that is
+    not a URL with a scheme and a host, such as https://zenodo.org/records/1, is
+    logged as an error naming row and column and left out."""
+    urls = []
+    for number, row in enumerate(read_sheet_rows(data, REFERENCES_SHEET), start=2):
+        cell = row.get(REFERENCE_COLUMN)
+        if is_empty(cell):
+            continue
+        url = str(cell).strip()
+        parts = urlsplit(url)
+        if parts.scheme in ('http', 'https') and parts.netloc:
+            urls.append(url)
+        else:
+            logger.error(
+                'could not read a reference',
+                row=number,
+                column=REFERENCE_COLUMN,
+                reason=f'{url!r} is not a URL beginning with http:// or https://',
+            )
+    return urls
+
+
 def sample_standards(data: dict) -> dict[str, list[str]]:
     """The standards written in the column `standard` of the sheet `samples` in
     `data`, by sample identifier, for the samples that have any. A comma in
@@ -662,7 +700,9 @@ TEMPLATE_GUIDE = (
         'list',
         'A row of a list: one item per row, from the top, without gaps. In the sheet '
         'files, one path pattern and the values for the files it matches; in the '
-        'sheet samples, one sample. Insert rows within a list if you need more.',
+        'sheet samples, one sample; in the sheet references, one URL of a database '
+        'or repository linked to the project. Insert rows within a list if you need '
+        'more.',
     ),
     (
         'header',
@@ -692,7 +732,12 @@ TEMPLATE_GUIDE = (
 )
 
 #: The colours of the sheets' tabs.
-TEMPLATE_TAB_COLORS = {'project': '375623', 'files': '1F4E79', 'samples': '5B2C6F'}
+TEMPLATE_TAB_COLORS = {
+    'project': '375623',
+    'files': '1F4E79',
+    'samples': '5B2C6F',
+    REFERENCES_SHEET: '7F6000',
+}
 
 
 class TemplateColumn(NamedTuple):
@@ -733,7 +778,8 @@ def _value_column(header: str, quantity, text: bool = False) -> TemplateColumn:
 
 
 def template_columns(layer_blocks: int = TEMPLATE_LAYER_BLOCKS) -> dict:
-    """The columns of the sheets `project`, `files` and `samples` of the template,
+    """The columns of the sheets `project`, `files`, `samples` and `references` of
+    the template,
     from the schema: the quantities with a tabular annotation, and the sample
     columns with their units followed by `layer_blocks` layer blocks."""
     project = []
@@ -781,7 +827,17 @@ def template_columns(layer_blocks: int = TEMPLATE_LAYER_BLOCKS) -> dict:
             quantity = layer_quantities[field]
             header = f'Layer{block}: {field}{_unit_label(quantity)}'
             samples.append(_value_column(header, quantity)._replace(group=group))
-    return {'project': project, 'files': files, 'samples': samples}
+    references = [
+        TemplateColumn(
+            REFERENCE_COLUMN, REFERENCE_COLUMN_DESCRIPTION, text=True, group='documents'
+        )
+    ]
+    return {
+        'project': project,
+        'files': files,
+        'samples': samples,
+        REFERENCES_SHEET: references,
+    }
 
 
 #: The borders of the template: bold around what is filled in, thin between list
