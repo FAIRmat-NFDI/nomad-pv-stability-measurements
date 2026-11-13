@@ -29,6 +29,12 @@ from typing import TYPE_CHECKING, NamedTuple
 from nomad.datamodel.metainfo.basesections import CompositeSystemReference
 from nomad.parsing.tabular import read_table_data
 from nomad.units import ureg
+from openpyxl import Workbook
+from openpyxl.comments import Comment
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Protection, Side
+from openpyxl.utils import get_column_letter, quote_sheetname
+from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.worksheet.protection import SheetProtection
 
 from nomad_pv_stability_measurements.schema_packages.sample_schema import (
     Encapsulation,
@@ -611,16 +617,95 @@ def write_sample_entries(
 # The template.
 
 
+#: The colours of the template's column groups: of the header, written in white
+#: bold, and the light tint of the column below it. Columns of one group are filled
+#: alike, so that the parts of a sample or a layer block are seen at a glance.
+TEMPLATE_GROUP_COLORS = {
+    'identity': ('1F4E79', 'DDEBF7'),
+    'proposal': ('375623', 'E2EFDA'),
+    'documents': ('7F6000', 'FFF2CC'),
+    'values': ('375623', 'E2EFDA'),
+    'sample': ('5B2C6F', 'EADCF0'),
+    'module': ('833C0B', 'FBE4D5'),
+    'substrate': ('0B5345', 'D1F2EB'),
+    'encapsulation': ('7B241C', 'F5D5D2'),
+    'layer': ('404040', 'F2F2F2'),
+    'layer_alternate': ('707070', 'E4E4E4'),
+}
+
+#: How many rows the lists of the template, the sheets `files` and `samples`, offer;
+#: rows can be added.
+TEMPLATE_LIST_ROWS = 40
+
+#: The sheet of the template that says how to fill it in, on which it opens. Not the
+#: first sheet: that is `project`, which NOMAD's tabular parser reads.
+TEMPLATE_GUIDE_SHEET = 'How to fill in'
+
+#: The lines of `TEMPLATE_GUIDE_SHEET`, each with what is shown beside it: `form`, a
+#: field to fill; `list`, a row of a list; `header`, a heading; else nothing.
+TEMPLATE_GUIDE = (
+    ('title', 'Project data of a PV stability upload'),
+    (
+        'text',
+        'Fill in this workbook and put it, named project_data.xlsx, at the root of '
+        'the upload. NOMAD reads it when the upload is processed: the proposal, the '
+        'samples with their layer stacks and standards, and values for the files '
+        'that their own reading code does not find.',
+    ),
+    ('heading', 'What to fill in'),
+    (
+        'form',
+        'A field: one value. In the sheet project, the boxed cells under the '
+        'headings hold the proposal as submitted in GATE.',
+    ),
+    (
+        'list',
+        'A row of a list: one item per row, from the top, without gaps. In the sheet '
+        'files, one path pattern and the values for the files it matches; in the '
+        'sheet samples, one sample. Insert rows within a list if you need more.',
+    ),
+    (
+        'header',
+        'A heading: fixed, do not change it. Point at a heading to read what belongs '
+        'below it. Many columns offer a dropdown of allowed or suggested values. Units '
+        'are those in the headings, e.g. active_area [cm^2].',
+    ),
+    ('heading', 'Good to know'),
+    (
+        'text',
+        'Only the outlined cells can be edited. The sheets are protected without a '
+        'password: to change more, e.g. to paste another layer block (Layer9: …) at '
+        'the end of the sheet samples, unprotect the sheet (Review, Unprotect sheet).',
+    ),
+    (
+        'text',
+        'Dates and times are written as text, e.g. 2026-09-13 or '
+        '2026-09-13T08:00:00+02:00. Several values in one cell are separated by '
+        'commas, e.g. the standards ISOS-L-2 (65 °C, MPP), ISOS-D-1.',
+    ),
+    (
+        'text',
+        'The colours of the headings group the columns: what identifies the proposal, '
+        'a file pattern or a sample (blue), the sample, module, substrate and '
+        'encapsulation, and the layer blocks in alternating grey.',
+    ),
+)
+
+#: The colours of the sheets' tabs.
+TEMPLATE_TAB_COLORS = {'project': '375623', 'files': '1F4E79', 'samples': '5B2C6F'}
+
+
 class TemplateColumn(NamedTuple):
     """A column of the template: its header, the comment on the header, the values
-    of its dropdown, whether other values are refused, and whether its cells are
-    text."""
+    of its dropdown, whether other values are refused, whether its cells are text,
+    and its group in `TEMPLATE_GROUP_COLORS`."""
 
     header: str
     comment: str | None
     values: list | None = None
     strict: bool = False
     text: bool = False
+    group: str = 'values'
 
 
 def _unit_label(quantity) -> str:
@@ -655,12 +740,22 @@ def template_columns(layer_blocks: int = TEMPLATE_LAYER_BLOCKS) -> dict:
     for quantity in ProjectData.m_def.all_quantities.values():
         tabular = quantity.m_get_annotations('tabular')
         if tabular is not None and '/' not in tabular.name:
-            project.append(_value_column(tabular.name, quantity, text=True))
+            if tabular.name in ('proposal_number', 'proposal'):
+                group = 'identity'
+            elif tabular.name.endswith('_file'):
+                group = 'documents'
+            else:
+                group = 'proposal'
+            column = _value_column(tabular.name, quantity, text=True)
+            project.append(column._replace(group=group))
 
-    files = [TemplateColumn('files', FILES_COLUMN_DESCRIPTION, text=True)] + [
-        _value_column(name, file_column_quantity(name), text=True)
-        for name in FILE_COLUMNS[1:]
+    files = [
+        TemplateColumn('files', FILES_COLUMN_DESCRIPTION, text=True, group='identity')
     ]
+    for name in FILE_COLUMNS[1:]:
+        column = _value_column(name, file_column_quantity(name), text=True)
+        group = 'sample' if name in SAMPLE_IDENTITY_COLUMNS else 'values'
+        files.append(column._replace(group=group))
 
     samples = [
         TemplateColumn(
@@ -668,74 +763,184 @@ def template_columns(layer_blocks: int = TEMPLATE_LAYER_BLOCKS) -> dict:
             'The identifier of the sample, as the stations write it in their files. '
             'Unique in this sheet.',
             text=True,
+            group='identity',
         ),
-        TemplateColumn(STANDARD_COLUMN, STANDARD_COLUMN_DESCRIPTION, text=True),
+        TemplateColumn(
+            STANDARD_COLUMN, STANDARD_COLUMN_DESCRIPTION, text=True, group='identity'
+        ),
     ]
     for name, (section, quantity_name) in SAMPLE_COLUMNS.items():
         if name != 'sample_id':
             quantity = SAMPLE_SECTIONS[section].m_def.all_quantities[quantity_name]
-            samples.append(_value_column(f'{name}{_unit_label(quantity)}', quantity))
+            column = _value_column(f'{name}{_unit_label(quantity)}', quantity)
+            samples.append(column._replace(group=section))
     layer_quantities = LayerProperties.m_def.all_quantities
     for block in range(1, layer_blocks + 1):
+        group = 'layer' if block % 2 else 'layer_alternate'
         for field in LAYER_FIELDS:
             quantity = layer_quantities[field]
             header = f'Layer{block}: {field}{_unit_label(quantity)}'
-            samples.append(_value_column(header, quantity))
+            samples.append(_value_column(header, quantity)._replace(group=group))
     return {'project': project, 'files': files, 'samples': samples}
 
 
-def write_project_data_template(path: str, layer_blocks: int = TEMPLATE_LAYER_BLOCKS):
-    """Writes the empty spreadsheet `path` with the sheets `project`, `files` and
-    `samples` of `template_columns`. The header comments are the quantities'
-    descriptions; the dropdowns offer the allowed values, refusing others, or the
-    suggestions, accepting others. Their values are in a hidden sheet `lists`."""
-    from openpyxl import Workbook
-    from openpyxl.comments import Comment
-    from openpyxl.styles import Alignment, Font
-    from openpyxl.utils import get_column_letter, quote_sheetname
-    from openpyxl.worksheet.datavalidation import DataValidation
+#: The borders of the template: bold around what is filled in, thin between list
+#: cells, white between headings so that neighbouring groups stay apart.
+_BOLD = Side(style='medium', color='000000')
+_THIN = Side(style='thin', color='A6A6A6')
+_DIVIDER = Side(style='thin', color='FFFFFF')
 
+
+def _form_field(cell) -> None:
+    """Makes `cell` a field to fill: white, boxed by a bold border, editable; long
+    text wraps within it."""
+    cell.fill = PatternFill('solid', fgColor='FFFFFF')
+    cell.border = Border(left=_BOLD, right=_BOLD, top=_BOLD, bottom=_BOLD)
+    cell.alignment = Alignment(wrap_text=True, vertical='top')
+    cell.protection = Protection(locked=False)
+
+
+def _list_cell(cell, tint: str, first: bool, last: bool, bottom: bool) -> None:
+    """Makes `cell` a cell of a list: rows alternate between `tint` and white, the
+    list is outlined in bold (the `first` and `last` column, the `bottom` row),
+    editable."""
+    cell.fill = PatternFill('solid', fgColor=tint if cell.row % 2 else 'FFFFFF')
+    cell.border = Border(
+        left=_BOLD if first else _THIN,
+        right=_BOLD if last else _THIN,
+        top=_THIN,
+        bottom=_BOLD if bottom else _THIN,
+    )
+    cell.protection = Protection(locked=False)
+
+
+def _heading(cell, color: str) -> None:
+    """Makes `cell` a heading: white bold text on `color`, locked."""
+    cell.font = Font(bold=True, color='FFFFFF')
+    cell.fill = PatternFill('solid', fgColor=color)
+    cell.border = Border(left=_DIVIDER, right=_DIVIDER)
+    cell.alignment = Alignment(wrap_text=True, vertical='center', horizontal='center')
+
+
+def _dropdown(sheet, letter: str, column: TemplateColumn, lists) -> None:
+    """Adds the dropdown of `column`, in the column `letter` of `sheet`, with its
+    values in a new column of the hidden sheet `lists`."""
+    list_letter = get_column_letter(lists.max_column + 1)
+    if lists.max_column == 1 and lists['A1'].value is None:
+        list_letter = 'A'
+    lists[f'{list_letter}1'] = f'{sheet.title}: {column.header}'
+    for row, value in enumerate(column.values, start=2):
+        lists[f'{list_letter}{row}'] = value
+    validation = DataValidation(
+        type='list',
+        formula1=f'{quote_sheetname("lists")}!${list_letter}$2:'
+        f'${list_letter}${len(column.values) + 1}',
+        allow_blank=True,
+        showErrorMessage=column.strict,
+    )
+    sheet.add_data_validation(validation)
+    validation.add(f'{letter}2:{letter}1000')
+
+
+def _write_sheet(sheet, columns: list[TemplateColumn], lists) -> None:
+    """Writes the headings of `columns` into `sheet` and below them the cells to
+    fill: one row of fields for the sheet `project`, a list of `TEMPLATE_LIST_ROWS`
+    rows for the others. Protects the sheet, so that only those cells can be
+    edited, and rows can be added to a list."""
+    is_form = sheet.title == 'project'
+    last_row = 2 if is_form else 1 + TEMPLATE_LIST_ROWS
+    sheet.sheet_properties.tabColor = TEMPLATE_TAB_COLORS[sheet.title]
+    sheet.row_dimensions[1].height = 48
+    if is_form:
+        # Room for a title or an abstract of a few lines.
+        sheet.row_dimensions[2].height = 60
+    for index, column in enumerate(columns, start=1):
+        letter = get_column_letter(index)
+        header_color, tint = TEMPLATE_GROUP_COLORS[column.group]
+        cell = sheet.cell(row=1, column=index, value=column.header)
+        _heading(cell, header_color)
+        if column.comment:
+            cell.comment = Comment(' '.join(column.comment.split()), 'NOMAD')
+        # Free text, such as a title or a path pattern, gets room to be read.
+        least = 24 if column.text and not column.values else 14
+        sheet.column_dimensions[letter].width = max(
+            least, min(40, len(column.header) + 4)
+        )
+        for row in range(2, last_row + 1):
+            cell = sheet.cell(row=row, column=index)
+            if is_form:
+                _form_field(cell)
+            else:
+                first, last = index == 1, index == len(columns)
+                _list_cell(cell, tint, first, last, row == last_row)
+            if column.text:
+                # Text, so that dates and identifiers are kept as written.
+                cell.number_format = '@'
+        if column.values:
+            _dropdown(sheet, letter, column, lists)
+    sheet.freeze_panes = 'A2'
+    # Without a password: the protection guides, it does not secure.
+    sheet.protection = SheetProtection(
+        sheet=True,
+        insertRows=is_form,
+        deleteRows=is_form,
+        formatColumns=False,
+        formatRows=False,
+    )
+
+
+def _write_guide(guide) -> None:
+    """Writes `TEMPLATE_GUIDE` into the sheet `guide`, each line beside an example
+    of what it describes."""
+    guide.sheet_properties.tabColor = '000000'
+    guide.column_dimensions['A'].width = 18
+    guide.column_dimensions['B'].width = 100
+    for row, (kind, text) in enumerate(TEMPLATE_GUIDE, start=1):
+        cell = guide.cell(row=row, column=2, value=text)
+        cell.alignment = Alignment(wrap_text=True, vertical='center')
+        example = guide.cell(row=row, column=1)
+        if kind == 'title':
+            cell.font = Font(bold=True, size=16)
+        elif kind == 'heading':
+            cell.font = Font(bold=True, size=12)
+        elif kind == 'form':
+            _form_field(example)
+        elif kind == 'list':
+            _list_cell(example, TEMPLATE_GROUP_COLORS['sample'][1], True, True, False)
+        elif kind == 'header':
+            example.value = 'heading'
+            _heading(example, TEMPLATE_GROUP_COLORS['identity'][0])
+        example.protection = Protection(locked=True)
+        # A line of about 100 characters in the wide column, 15 points high.
+        lines = -(-len(text) // 100)
+        guide.row_dimensions[row].height = 36 if kind == 'title' else 15 * lines + 12
+    guide.protection = SheetProtection(sheet=True)
+
+
+def write_project_data_template(path: str, layer_blocks: int = TEMPLATE_LAYER_BLOCKS):
+    """Writes the empty spreadsheet `path` as a form: the sheets `project`, `files`
+    and `samples` of `template_columns`, and the sheet `TEMPLATE_GUIDE_SHEET`, on
+    which it opens.
+
+    Only the cells to fill can be edited; the sheets are protected without a
+    password. In `project`, they are single fields under the headings, each boxed by
+    a bold border; in `files` and `samples`, lists of `TEMPLATE_LIST_ROWS` rows in
+    alternating colours inside a bold outline, to which rows can be added. Headings
+    are coloured by their group (`TEMPLATE_GROUP_COLORS`) and carry the quantities'
+    descriptions as comments; dropdowns offer the allowed values, refusing others, or
+    the suggestions, accepting others, from a hidden sheet `lists`."""
     workbook = Workbook()
     workbook.remove(workbook.active)
     sheets = template_columns(layer_blocks)
     for name in sheets:
         workbook.create_sheet(name)
+    guide = workbook.create_sheet(TEMPLATE_GUIDE_SHEET)
     lists = workbook.create_sheet('lists')
     lists.sheet_state = 'hidden'
-    list_count = 0
-
     for name, columns in sheets.items():
-        sheet = workbook[name]
-        for index, column in enumerate(columns, start=1):
-            letter = get_column_letter(index)
-            cell = sheet.cell(row=1, column=index, value=column.header)
-            cell.font = Font(bold=True)
-            cell.alignment = Alignment(wrap_text=True, vertical='top')
-            if column.comment:
-                cell.comment = Comment(' '.join(column.comment.split()), 'NOMAD')
-            sheet.column_dimensions[letter].width = max(
-                14, min(40, len(column.header) + 4)
-            )
-            if column.text:
-                # Text, so that dates and identifiers are kept as written.
-                sheet.column_dimensions[letter].number_format = '@'
-            if column.values:
-                list_count += 1
-                list_letter = get_column_letter(list_count)
-                lists[f'{list_letter}1'] = f'{name}: {column.header}'
-                for row, value in enumerate(column.values, start=2):
-                    lists[f'{list_letter}{row}'] = value
-                validation = DataValidation(
-                    type='list',
-                    formula1=f'{quote_sheetname("lists")}!${list_letter}$2:'
-                    f'${list_letter}${len(column.values) + 1}',
-                    allow_blank=True,
-                    showErrorMessage=column.strict,
-                )
-                sheet.add_data_validation(validation)
-                validation.add(f'{letter}2:{letter}1000')
-        sheet.freeze_panes = 'A2'
-
+        _write_sheet(workbook[name], columns, lists)
+    _write_guide(guide)
+    workbook.active = workbook.worksheets.index(guide)
     workbook.properties.creator = 'nomad-pv-stability-measurements'
     workbook.properties.created = datetime(2026, 1, 1)
     workbook.save(path)

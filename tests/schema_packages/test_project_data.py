@@ -37,9 +37,11 @@ def spreadsheet(tmp_path, project=None, files=(), samples=(), extra_headers=()):
     workbook = openpyxl.load_workbook(path)
 
     def fill(sheet, rows):
+        # From row 2, as a user fills the form's fields and lists.
         headers = [cell.value for cell in sheet[1]]
-        for row in rows:
-            sheet.append([row.get(header) for header in headers])
+        for number, row in enumerate(rows, start=2):
+            for column, header in enumerate(headers, start=1):
+                sheet.cell(row=number, column=column, value=row.get(header))
 
     samples_sheet = workbook['samples']
     for header in extra_headers:
@@ -529,6 +531,28 @@ def test_the_shipped_template_has_the_columns_of_the_schema(tmp_path):
     assert headers(EXAMPLE_UPLOADS / 'project_data_template.xlsx') == headers(
         tmp_path / 'template.xlsx'
     )
+
+
+def test_the_template_is_a_form_that_opens_on_how_to_fill_it_in(tmp_path):
+    path = tmp_path / 'template.xlsx'
+    write_project_data_template(str(path))
+    workbook = openpyxl.load_workbook(path)
+
+    def editable(sheet, row, column):
+        return not workbook[sheet].cell(row=row, column=column).protection.locked
+
+    assert workbook.active.title == 'How to fill in'
+    # The headings are fixed; the project has one row of fields, the lists have
+    # rows to fill, and nothing around them can be edited.
+    for sheet in ('project', 'files', 'samples'):
+        assert workbook[sheet].protection.sheet
+        assert not editable(sheet, 1, 1)
+        assert editable(sheet, 2, 1)
+    assert not editable('project', 3, 1)
+    assert editable('files', 41, 1) and not editable('files', 42, 1)
+    # Rows can be added to the lists, not to the project's single row.
+    assert workbook['project'].protection.insertRows
+    assert not workbook['samples'].protection.insertRows
 
 
 def test_the_example_upload_is_processed_without_problems(staging_upload):
