@@ -1,0 +1,20 @@
+## Header ##		
+# General info		
+User	EXAMPLE	
+Device	RPV-S2	
+Test	IPCE	
+Date	2026-09-14	
+Time	10:00:00	
+Wavelength (nm)	EQE (%)
+300	5
+350	5
+400	5
+450	80
+500	80
+550	80
+600	80
+650	80
+700	80
+750	80
+800	5
+850	5

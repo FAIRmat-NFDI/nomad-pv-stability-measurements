@@ -47,13 +47,35 @@ def test_UNITOV_file_is_registered_with_kind_sample_and_start(tmp_path):
 
     assert not [log for log in logs if log['log_level'] in ('warning', 'error')]
 
-    assert data.file == 'UNITOV/run_1/001_JV.txt'
+    assert data.file.path == 'UNITOV/run_1/001_JV.txt'
     assert data.institution == 'UNITOV'
-    assert data.measurement_kind == 'jv'
-    assert data.file_format == 'txt'
-    assert data.sample.id == '3C_C1_1'
+    assert data.stability_file_type == 'jv'
+    assert data.file.file_format == 'txt'
+    assert data.provenance == 'measured'
+    assert data.sample_identity.sample_id == '3C_C1_1'
     # 18:34:18 local time in Rome, in summer time (UTC+2).
-    assert data.time_stamp == datetime(2023, 10, 19, 16, 34, 18, tzinfo=timezone.utc)
+    assert data.datetime == datetime(2023, 10, 19, 16, 34, 18, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize(
+    'test, algorithm, kind',
+    [
+        ('Stability (Tracking)', 'MPPT', 'mpp_tracking'),
+        ('Stability (Tracking)', 'Fixed Voltage', 'stability_series'),
+        ('Stability (Parameters)', None, 'jv_parameters'),
+    ],
+)
+def test_UNITOV_series_are_told_apart(tmp_path, test, algorithm, kind):
+    content = UNITOV_JV.replace('Stability (JV)', test)
+    if algorithm:
+        content += f'Algorithm\t{algorithm}\t\r\n'
+    content += 'Time (Hours)\tVoc (V) FW\r\n0.5\t1.05\r\n'
+
+    data = parse(tmp_path, 'UNITOV/run_1/000_series.txt', content.encode()).data
+
+    assert data.stability_file_type == kind
+    # Each series ends at its last row, half an hour after its start.
+    assert data.datetime_end == datetime(2023, 10, 19, 17, 4, 18, tzinfo=timezone.utc)
 
 
 #: A UNITOV MPP tracking file of two hours, started at 18:34:18 in Rome. Long enough
@@ -75,10 +97,12 @@ def test_UNITOV_file_ends_at_its_last_row_or_else_when_it_starts(tmp_path):
     tracked = parse(tmp_path, tracking_path, UNITOV_LONG_TRACKING.encode()).data
     swept = parse(tmp_path, 'UNITOV/run_1/001_JV.txt', UNITOV_JV.encode()).data
 
-    assert tracked.measurement_kind == 'mpp_tracking'
+    assert tracked.stability_file_type == 'mpp_tracking'
     # Two hours after the start at 18:34:18 in Rome.
-    assert tracked.end_time == datetime(2023, 10, 19, 18, 34, 18, tzinfo=timezone.utc)
-    assert swept.end_time == swept.time_stamp
+    assert tracked.datetime_end == datetime(
+        2023, 10, 19, 18, 34, 18, tzinfo=timezone.utc
+    )
+    assert swept.datetime_end == swept.datetime
 
 
 def test_institution_without_tail_gets_no_end_from_the_last_row(tmp_path, monkeypatch):
@@ -86,8 +110,8 @@ def test_institution_without_tail_gets_no_end_from_the_last_row(tmp_path, monkey
     tracking_path = 'UNITOV/run_1/000_Tracking.txt'
     tracked = parse(tmp_path, tracking_path, UNITOV_LONG_TRACKING.encode()).data
 
-    assert tracked.measurement_kind == 'mpp_tracking'
-    assert tracked.end_time == tracked.time_stamp
+    assert tracked.stability_file_type == 'mpp_tracking'
+    assert tracked.datetime_end == tracked.datetime
 
 
 def test_utf8_header_text_is_kept(tmp_path):
@@ -95,7 +119,7 @@ def test_utf8_header_text_is_kept(tmp_path):
     content = UNITOV_JV.replace('3C_C1_1', 'Zelle_µ1').encode('utf-8')
     data = parse(tmp_path, 'UNITOV/run_1/001_JV.txt', content).data
 
-    assert data.sample.id == 'Zelle_µ1'
+    assert data.sample_identity.sample_id == 'Zelle_µ1'
 
 
 @pytest.mark.parametrize(
@@ -113,10 +137,10 @@ def test_unrecognized_file_is_registered_as_unknown(tmp_path, path, content, log
 
     assert [log['log_level'] for log in logs] == [log_level]
 
-    assert data.file == path
-    assert data.measurement_kind == 'unknown'
-    assert data.sample is None
-    assert data.time_stamp is None
+    assert data.file.path == path
+    assert data.stability_file_type == 'unknown'
+    assert data.sample_identity is None
+    assert data.datetime is None
 
 
 @pytest.mark.parametrize(
@@ -138,7 +162,7 @@ def test_file_in_no_institution_folder_belongs_to_the_uploaders_institution(
     data = parse(tmp_path, path, UNITOV_JV.encode(), email).data
 
     assert data.institution == institution
-    assert data.measurement_kind == kind
+    assert data.stability_file_type == kind
 
 
 @pytest.mark.parametrize(
@@ -149,8 +173,106 @@ def test_file_in_no_institution_folder_belongs_to_the_uploaders_institution(
         ('/app/.volumes/fs/staging/ab/abc/raw/sample.archive.json', False),
         ('/app/.volumes/fs/staging/ab/abc/raw/stability_upload.archive.yaml', False),
         ('/app/.volumes/fs/staging/ab/abc/raw/UNITOV/.DS_Store', False),
+        # The project data spreadsheet and its template have their own parser.
+        ('/app/.volumes/fs/staging/ab/abc/raw/project_data.xlsx', False),
+        ('/app/.volumes/fs/staging/ab/abc/raw/docs/project_data_template.xlsx', False),
+        ('/app/.volumes/fs/staging/ab/abc/raw/UNITOV/results.xlsx', True),
     ],
 )
 def test_parser_takes_data_files_but_not_archive_or_hidden_files(path, is_registered):
     name_re = stability_file_parser_entry_point.mainfile_name_re
     assert (re.fullmatch(name_re, path) is not None) == is_registered
+
+
+@pytest.mark.parametrize(
+    'start_time, end_time, given, duration',
+    [
+        (
+            datetime(2023, 10, 19, 16, tzinfo=timezone.utc),
+            datetime(2023, 10, 19, 17, 30, tzinfo=timezone.utc),
+            None,
+            1.5,
+        ),
+        (datetime(2023, 10, 19, 16, tzinfo=timezone.utc), None, None, 0),
+        (None, None, None, None),
+        # With times, the duration follows from them, whatever was given.
+        (datetime(2023, 10, 19, 16, tzinfo=timezone.utc), None, 5.0, 0),
+        # Without times, as for a simulation over model time, it is kept as given.
+        (None, None, 1000.0, 1000.0),
+    ],
+)
+def test_file_entry_knows_how_long_a_period_its_data_cover(
+    start_time, end_time, given, duration
+):
+    from nomad_pv_stability_measurements.schema_packages.schema_package import (
+        StabilityActivity,
+    )
+
+    entry = StabilityActivity(
+        datetime=start_time, datetime_end=end_time, duration=given
+    )
+    archive = EntryArchive(metadata=EntryMetadata(mainfile='data.csv'), data=entry)
+    entry.normalize(archive, utils.get_logger(__name__))
+
+    if duration is None:
+        assert entry.duration is None
+    else:
+        assert entry.duration.to('hour').magnitude == pytest.approx(duration)
+
+
+def test_a_file_entry_is_named_after_its_path_and_found_by_nomads_search():
+    from nomad_pv_stability_measurements.schema_packages.schema_package import (
+        StabilityActivity,
+        StabilityFile,
+    )
+
+    path = 'UNITOV/run_2/001_JV.txt'
+    entry = StabilityActivity(
+        file=StabilityFile(path=path),
+        stability_file_type='jv',
+        description='Second run after recovery.',
+    )
+    archive = EntryArchive(
+        metadata=EntryMetadata(upload_id='upload_1', mainfile=path), data=entry
+    )
+    entry.normalize(archive, utils.get_logger(__name__))
+
+    # The path, not only the file name, which other runs share.
+    assert archive.metadata.entry_name == path
+    eln = archive.results.eln
+    assert (eln.sections, eln.names, eln.descriptions, eln.methods) == (
+        ['StabilityActivity'],
+        [path],
+        ['Second run after recovery.'],
+        # The stability file type is the method by which apps find the file.
+        ['jv'],
+    )
+    # Without a proposal number, the upload makes the lab ID unique in NOMAD.
+    assert eln.lab_ids == ['upload_1:UNITOV/run_2/001_JV.txt']
+
+
+def test_the_file_is_the_output_and_the_sample_the_input_of_the_activity():
+    from nomad_pv_stability_measurements.schema_packages.sample_schema import (
+        SolarCellSample,
+    )
+    from nomad_pv_stability_measurements.schema_packages.schema_package import (
+        SampleIdentity,
+        StabilityActivity,
+        StabilityFile,
+    )
+
+    sample = SolarCellSample(sample_id='S1')
+    entry = StabilityActivity(
+        file=StabilityFile(path='UNITOV/001_JV.txt'),
+        sample_identity=SampleIdentity(sample_id='S1', entry=sample),
+    )
+    archive = EntryArchive(
+        metadata=EntryMetadata(mainfile='UNITOV/001_JV.txt'), data=entry
+    )
+    entry.normalize(archive, utils.get_logger(__name__))
+
+    workflow = archive.workflow2
+    assert [(link.name, link.section) for link in workflow.outputs] == [
+        ('UNITOV/001_JV.txt', entry.file)
+    ]
+    assert [(link.name, link.section) for link in workflow.inputs] == [('S1', sample)]

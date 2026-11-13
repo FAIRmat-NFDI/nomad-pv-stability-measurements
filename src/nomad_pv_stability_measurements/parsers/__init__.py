@@ -1,21 +1,4 @@
 from nomad.config.models.plugins import ParserEntryPoint
-from pydantic import Field
-
-
-class NewParserEntryPoint(ParserEntryPoint):
-    parameter: int = Field(0, description='Custom configuration parameter')
-
-    def load(self):
-        from nomad_pv_stability_measurements.parsers.parser import NewParser
-
-        return NewParser(**self.model_dump())
-
-
-parser_entry_point = NewParserEntryPoint(
-    name='NewParser',
-    description='New parser entry point configuration.',
-    mainfile_name_re=r'.*\.newmainfilename',
-)
 
 
 class StabilityFileParserEntryPoint(ParserEntryPoint):
@@ -30,33 +13,15 @@ class StabilityFileParserEntryPoint(ParserEntryPoint):
 stability_file_parser_entry_point = StabilityFileParserEntryPoint(
     name='StabilityFileParser',
     description="""
-    Registers every file of a stability upload with its measurement kind, file
-    format, start time and sample.
+    Registers every file of a stability upload with its stability file type, file
+    format, provenance, times and sample.
     """,
     # Any file except NOMAD archive files, which must stay with NOMAD's own parser,
-    # and files whose name starts with a dot. Matched against the path on disk, so
+    # files whose name starts with a dot, and the project data spreadsheet and its
+    # template, which the project entry reads. Matched against the path on disk, so
     # it must not reject dots in the folders above the upload.
-    mainfile_name_re=r'(?!.*\.archive\.(json|ya?ml)$)(?!.*/\.[^/]*$).*',
-)
-
-
-class StabilityUploadSummaryParserEntryPoint(ParserEntryPoint):
-    def load(self):
-        from nomad_pv_stability_measurements.parsers.summary_parser import (
-            StabilityUploadSummaryParser,
-        )
-
-        return StabilityUploadSummaryParser(**self.model_dump())
-
-
-summary_parser_entry_point = StabilityUploadSummaryParserEntryPoint(
-    name='StabilityUploadSummaryParser',
-    description="""
-    Reads the summary file of a stability upload after the entries of all its files
-    are made.
-    """,
-    # One level above the file parser, so that the entries of all files exist when
-    # the summary is normalized.
-    level=stability_file_parser_entry_point.level + 1,
-    mainfile_name_re=r'(.*/)?stability_upload\.archive\.(json|ya?ml)',
+    mainfile_name_re=(
+        r'(?!.*\.archive\.(json|ya?ml)$)(?!.*/\.[^/]*$)'
+        r'(?!(.*/)?project_data(_template)?\.xlsx$).*'
+    ),
 )

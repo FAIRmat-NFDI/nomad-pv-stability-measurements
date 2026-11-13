@@ -1,0 +1,21 @@
+## Header ##		
+# General info		
+User	EXAMPLE	
+Device	RPV-S2	
+Test	Stability (JV)	
+Date	2026-09-13	
+Time	09:00:00	
+# Data		
+Voltage (V)	Current Density (mA/cm2)
+0.0	-22.50
+0.1	-22.48
+0.2	-22.42
+0.3	-22.32
+0.4	-22.18
+0.5	-22.00
+0.6	-21.78
+0.7	-21.52
+0.8	-21.22
+0.9	-20.88
+1.0	-20.50
+1.1	-20.08

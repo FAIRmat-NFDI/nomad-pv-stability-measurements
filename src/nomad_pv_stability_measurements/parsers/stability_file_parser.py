@@ -1,23 +1,8 @@
-"""Registering every file of a stability upload as a `StabilityFileEntry`."""
-
-from typing import (
-    TYPE_CHECKING,
-)
-
-if TYPE_CHECKING:
-    from types import ModuleType
-    from typing import BinaryIO
-
-    from nomad.datamodel.datamodel import (
-        EntryArchive,
-    )
-    from structlog.stdlib import (
-        BoundLogger,
-    )
+"""Registering every file of a stability upload as a `StabilityActivity` with
+the file as its output."""
 
 import json
-import os
-from pathlib import PurePosixPath
+from typing import TYPE_CHECKING
 
 from nomad.datamodel.context import ServerContext
 from nomad.parsing.parser import MatchingParser
@@ -25,106 +10,38 @@ from nomad.parsing.parser import MatchingParser
 from nomad_pv_stability_measurements.file_reading import INSTITUTIONS
 from nomad_pv_stability_measurements.file_reading.file_reading_utils import (
     file_format_from_path,
-    is_in_institution_folder,
+)
+from nomad_pv_stability_measurements.parsers.project_data_utils import (
+    PROJECT_DATA_ARCHIVE,
+    Spreadsheet,
+    clean_sample_id,
+    described_values,
+    load_spreadsheet,
+    sample_entry_reference,
+)
+from nomad_pv_stability_measurements.parsers.utils import (
+    HEAD_SIZE,
+    TAIL_SIZE,
+    DescribedFileLogger,
+    institution_of,
+    read_head,
+    read_tail,
+    uploader_email,
 )
 from nomad_pv_stability_measurements.schema_packages.schema_package import (
-    MEASUREMENT_KINDS,
-    StabilityFileEntry,
-    StabilitySampleIdentity,
-    StabilityUploadSummary,
+    STABILITY_FILE_TYPES,
+    ProjectData,
+)
+from nomad_pv_stability_measurements.schema_packages.utils import (
+    stability_activity,
+    unique_lab_id,
 )
 
-#: How many bytes of the beginning of a file the `match_<kind>` functions see, for
-#: an institution whose module sets no `HEAD_SIZE` of its own.
-HEAD_SIZE = 4096
+if TYPE_CHECKING:
+    from typing import BinaryIO
 
-#: How many bytes of the end of a file the `match_<kind>` functions see, for an
-#: institution whose module sets no `TAIL_SIZE` of its own.
-TAIL_SIZE = 4096
-
-#: The endings of NOMAD archive files, such as ELN entries and the upload summary.
-#: These are processed by NOMAD itself and not registered.
-ARCHIVE_FILE_ENDINGS = ('.archive.json', '.archive.yaml', '.archive.yml')
-
-#: The names of an upload's summary file, at the upload's root. A user may supply
-#: any of them; a summary created automatically gets the first.
-SUMMARY_FILE_NAMES = (
-    'stability_upload.archive.json',
-    'stability_upload.archive.yaml',
-    'stability_upload.archive.yml',
-)
-
-
-def is_registered(path: str) -> bool:
-    """`True` if the file at `path`, a path within the upload, is registered: all
-    files except NOMAD archive files, hidden files, files in hidden folders, and
-    files whose name starts with `~`, which NOMAD never processes."""
-    names = PurePosixPath(path).parts
-    if any(name.startswith('.') for name in names) or names[-1].startswith('~'):
-        return False
-    return not path.endswith(ARCHIVE_FILE_ENDINGS)
-
-
-def read_head(file: 'BinaryIO', size: int = HEAD_SIZE) -> str:
-    """The first `size` bytes of `file`, opened in binary mode, as text.
-
-    Decoded as UTF-8: before parsing, NOMAD rewrites text files that it recognizes as
-    Latin-1 in UTF-8. Bytes that are not UTF-8, as in binary files, become `�`
-    instead of an error, so such a file gives text that no `match_<kind>` function
-    recognizes."""
-    return file.read(size).decode('utf-8', errors='replace')
-
-
-def read_tail(file: 'BinaryIO', size: int = TAIL_SIZE) -> str:
-    """The last `size` bytes of `file`, opened in binary mode, as text, decoded like
-    `read_head`; empty for `size` 0. If head and tail together are longer than the
-    file, they overlap; for a file shorter than `size`, the tail is the whole file.
-    The tail may begin within a line."""
-    if size == 0:
-        return ''
-    file.seek(0, os.SEEK_END)
-    file.seek(max(0, file.tell() - size))
-    return file.read().decode('utf-8', errors='replace')
-
-
-def institution_of(path: str, email: str | None = None) -> 'ModuleType | None':
-    """The institution of the file at `path`, a path within the upload: the first
-    module in `INSTITUTIONS` whose institution folder the file is in.
-
-    For a file in no institution's folder, the first module whose `EMAIL_DOMAINS`
-    hold the domain of `email`, the uploader's email address; a subdomain counts, so
-    `chem.uni.edu` belongs to `uni.edu`. `None` if neither decides."""
-    folder_institution = next(
-        (
-            module
-            for module in INSTITUTIONS
-            if is_in_institution_folder(path, module.INSTITUTION)
-        ),
-        None,
-    )
-    if folder_institution is not None or not email or '@' not in email:
-        return folder_institution
-
-    domain = email.rsplit('@', 1)[1].lower()
-    return next(
-        (
-            module
-            for module in INSTITUTIONS
-            for institution_domain in getattr(module, 'EMAIL_DOMAINS', ())
-            if domain == institution_domain.lower()
-            or domain.endswith('.' + institution_domain.lower())
-        ),
-        None,
-    )
-
-
-def uploader_email(archive: 'EntryArchive') -> str | None:
-    """The email address of the upload's main author, as NOMAD's user management
-    knows it, or `None`, as when parsing outside of NOMAD's processing."""
-    try:
-        return archive.metadata.main_author.email
-    except Exception:
-        return None
+    from nomad.datamodel.datamodel import EntryArchive
+    from structlog.stdlib import BoundLogger
 
 
 def register_file(
@@ -140,21 +57,22 @@ def register_file(
 
     Returns two values:
 
-    - the values of the `StabilityFile` quantities, without those nobody knows;
+    - the values of the `StabilityActivity` quantities and of its file, without those nobody knows;
     - the `data` dict that the institution's `match_<kind>` function returned.
 
     The institution is given by `institution_of`: by the file's folder, or else by
     the domain of `email`, which is logged.
 
     The institution's `match_<kind>` functions are asked in the order of
-    `MEASUREMENT_KINDS`, and the first that recognizes the file, by not returning
+    `STABILITY_FILE_TYPES`, and the first that recognizes the file, by not returning
     `False`, decides. A function that fails is logged as a warning and treated as not
-    recognizing the file. A measurement whose function gives no end time ends when it
+    recognizing the file. A file whose function gives no end time ends when it
     starts.
 
     A file that belongs to no institution, by folder or email, is of kind `unknown`
-    and logged as an error, because no institution's code can read it. A file of an institution that
-    no function recognizes is of kind `unknown` and logged as a warning.
+    and logged as an error, because no institution's code can read it. A file of an
+    institution that no function recognizes is of kind `unknown` and logged as a
+    warning.
     """
     values = {'file': path, 'file_format': file_format_from_path(path)}
 
@@ -176,7 +94,7 @@ def register_file(
         )
 
     values['institution'] = institution.INSTITUTION
-    for kind in MEASUREMENT_KINDS:
+    for kind in STABILITY_FILE_TYPES:
         match = getattr(institution, f'match_{kind}', None)
         if match is None:
             continue
@@ -193,18 +111,16 @@ def register_file(
         if result is False:
             continue
 
-        time_stamp, end_time, sample_id, sample_reference, data = result
-        values['measurement_kind'] = kind
-        if time_stamp is not None:
-            values['time_stamp'] = time_stamp
-        if end_time is None:
-            end_time = time_stamp
-        if end_time is not None:
-            values['end_time'] = end_time
-        if sample_id is not None or sample_reference is not None:
-            values['sample'] = StabilitySampleIdentity(
-                id=sample_id, reference=sample_reference
-            )
+        start_time, end_time, provenance, sample_id, sample_reference, data = result
+        found = {
+            'stability_file_type': kind,
+            'datetime': start_time,
+            'datetime_end': start_time if end_time is None else end_time,
+            'provenance': provenance,
+            'sample_id': clean_sample_id(sample_id),
+            'sample_reference': sample_reference,
+        }
+        values.update({key: value for key, value in found.items() if value is not None})
         return values, data
 
     logger.warning(
@@ -215,34 +131,89 @@ def register_file(
     return values, {}
 
 
-def ensure_summary(archive: 'EntryArchive', logger: 'BoundLogger') -> None:
-    """Creates the upload's summary file, unless the upload has one, and has NOMAD
-    process it.
+def with_project_data(
+    values: dict, described: dict, spreadsheet: 'Spreadsheet'
+) -> dict:
+    """`values`, the values of a file found by matching, with `described`, those that
+    the rows of the sheet `files` of the project data `spreadsheet` give for it,
+    which win field by field; with a reference to the sample entry of the file's
+    `sample_id` if the sheet `samples` has it; and with the file's lab ID,
+    `<proposal_number>:<path>`, if the sheet `project` gives a proposal number.
+
+    If the descriptions give a start but no end, and matching gave no end of its
+    own, the file's data end when they start, as for matching."""
+    end_was_start = values.get('datetime_end') == values.get('datetime')
+    values = {**values, **described}
+    if 'datetime_end' not in described and end_was_start:
+        values.pop('datetime_end', None)
+        if values.get('datetime') is not None:
+            values['datetime_end'] = values['datetime']
+    if values.get('sample_id') is None:
+        values.pop('sample_id', None)
+    elif values['sample_id'] in spreadsheet.sample_ids:
+        values['sample'] = sample_entry_reference(values['sample_id'])
+    if spreadsheet.proposal_number:
+        values['lab_id'] = unique_lab_id(spreadsheet.proposal_number, values['file'])
+    return values
+
+
+def file_values(
+    path: str,
+    file: 'BinaryIO',
+    logger: 'BoundLogger',
+    email: str | None = None,
+    spreadsheet: 'Spreadsheet | None' = None,
+) -> tuple[dict, dict]:
+    """The values of the `StabilityActivity` of the file at `path`, a path within the
+    upload, whose content `file` gives, uploaded by the user with the address
+    `email`: found by `register_file` and completed by the project data
+    `spreadsheet` with `with_project_data`; and the `data` that the institution's
+    `match_<kind>` function returned.
+
+    The institution's module sets how much of the beginning and end of the file its
+    functions see. Problems of a file that the spreadsheet describes are logged as
+    information, because the spreadsheet gives its values."""
+    institution = institution_of(path, email)
+    content = read_head(file, getattr(institution, 'HEAD_SIZE', HEAD_SIZE))
+    tail = read_tail(file, getattr(institution, 'TAIL_SIZE', TAIL_SIZE))
+    described = {}
+    if spreadsheet is not None:
+        described = described_values(path, spreadsheet.file_rows)
+    if described:
+        logger = DescribedFileLogger(logger)
+    values, data = register_file(path, content, tail, logger, email)
+    if spreadsheet is not None:
+        values = with_project_data(values, described, spreadsheet)
+    return values, data
+
+
+def ensure_project_data(archive: 'EntryArchive', logger: 'BoundLogger') -> None:
+    """Creates the upload's project entry `ProjectData`, unless the upload has one,
+    and has NOMAD process it.
 
     Only during NOMAD's processing of an upload, with a `ServerContext`. The files of
-    an upload are processed in parallel, so several may create the summary at once;
-    they write the same content, and NOMAD processes the summary again instead of
-    failing. A failure is logged as a warning and does not fail the file's entry."""
+    an upload are processed in parallel, so several may create it at once; they
+    write the same content, and NOMAD processes it again instead of failing. An
+    existing entry, which may hold edits, is never overwritten. A failure is logged
+    as a warning and does not fail the file's entry."""
     context = archive.m_context
     if not isinstance(context, ServerContext):
         return
-    if any(context.raw_path_exists(name) for name in SUMMARY_FILE_NAMES):
+    path = PROJECT_DATA_ARCHIVE
+    if context.raw_path_exists(path):
         return
 
-    path = SUMMARY_FILE_NAMES[0]
     try:
         with context.raw_file(path, 'w') as file:
-            json.dump(
-                {'data': StabilityUploadSummary().m_to_dict(with_root_def=True)}, file
-            )
+            json.dump({'data': ProjectData().m_to_dict(with_root_def=True)}, file)
         context.process_updated_raw_file(path, allow_modify=True)
     except Exception as error:
-        logger.warning('could not create the upload summary', file=path, exc_info=error)
+        logger.warning('could not create the project data', file=path, exc_info=error)
 
 
 class StabilityFileParser(MatchingParser):
-    """Makes one `StabilityFileEntry` per file, filled by `register_file`, and
-    makes sure that the upload has a summary."""
+    """Makes one `StabilityActivity` per file, filled by `register_file`, and
+    makes sure that the upload has a project entry."""
 
     def parse(
         self,
@@ -257,16 +228,10 @@ class StabilityFileParser(MatchingParser):
         if archive.metadata is not None and archive.metadata.mainfile:
             path = archive.metadata.mainfile
 
-        # How much of the file the institution's functions see, as its module sets.
         email = uploader_email(archive)
-        institution = institution_of(path, email)
-        head_size = getattr(institution, 'HEAD_SIZE', HEAD_SIZE)
-        tail_size = getattr(institution, 'TAIL_SIZE', TAIL_SIZE)
+        spreadsheet = load_spreadsheet(archive.m_context)
         with open(mainfile, 'rb') as file:
-            content = read_head(file, head_size)
-            tail = read_tail(file, tail_size)
-        # The institution-specific `data` is not stored in the file's entry.
-        values, _data = register_file(path, content, tail, logger, email)
-        archive.data = StabilityFileEntry(**values)
+            values, data = file_values(path, file, logger, email, spreadsheet)
+        archive.data = stability_activity(values, data)
 
-        ensure_summary(archive, logger)
+        ensure_project_data(archive, logger)

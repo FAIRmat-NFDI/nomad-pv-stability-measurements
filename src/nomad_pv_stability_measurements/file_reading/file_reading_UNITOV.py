@@ -37,7 +37,8 @@ HEAD_SIZE = 4096
 #: Bytes from the end given as `tail`: enough for the last data row of a series.
 TAIL_SIZE = 4096
 
-_LOCAL_TIME_ZONE = ZoneInfo('Europe/Rome')
+#: Time zone of the measurement computers, for times written without one.
+LOCAL_TIME_ZONE = ZoneInfo('Europe/Rome')
 
 
 def _match(
@@ -47,8 +48,8 @@ def _match(
     tail: str | None = None,
 ) -> tuple | bool:
     """What every `match_<kind>` function returns: `False` unless `content` is a
-    UNITOV text file whose `Test` line is `test`, otherwise its start and end time and
-    sample.
+    UNITOV text file whose `Test` line is `test`, otherwise its start and end time,
+    provenance and sample. Every UNITOV file is measured at a station.
 
     `mppt` also checks the `Algorithm` line: `True` if it must be `MPPT`, `False` if
     it must not, `None` to ignore it. `tail`, the end of a series file, gives the end
@@ -67,19 +68,20 @@ def _match(
     if mppt is not None and (header.get('Algorithm') == 'MPPT') != mppt:
         return False
 
-    time_stamp = None
+    start_time = None
     if header.get('Date') and header.get('Time'):
         start = datetime.fromisoformat(f'{header["Date"]}T{header["Time"]}')
-        time_stamp = start.replace(tzinfo=_LOCAL_TIME_ZONE)
+        start_time = start.replace(tzinfo=LOCAL_TIME_ZONE)
     end_time = None
-    if time_stamp is not None and tail is not None:
+    if start_time is not None and tail is not None:
         hours = _hours_of_last_row(tail)
         if hours is not None:
-            end_time = time_stamp + timedelta(hours=hours)
+            end_time = start_time + timedelta(hours=hours)
+    provenance = 'measured'
     sample_id = header.get('Device') or None
     sample_reference = None
     data = {}
-    return time_stamp, end_time, sample_id, sample_reference, data
+    return start_time, end_time, provenance, sample_id, sample_reference, data
 
 
 def _hours_of_last_row(tail: str) -> float | None:
@@ -110,11 +112,14 @@ def match_mpp_tracking(path: str, content: str, tail: str) -> tuple | bool:
 
 
 def match_stability_series(path: str, content: str, tail: str) -> tuple | bool:
-    """The other series of a stability test: one held at a fixed voltage, and the
-    figures of merit of its J–V sweeps over time."""
-    return _match(content, 'Stability (Parameters)', tail=tail) or _match(
-        content, 'Stability (Tracking)', mppt=False, tail=tail
-    )
+    """The series of a stability test that holds the load at a fixed voltage."""
+    return _match(content, 'Stability (Tracking)', mppt=False, tail=tail)
+
+
+def match_jv_parameters(path: str, content: str, tail: str) -> tuple | bool:
+    """The figures of merit of every J–V sweep of a stability test over time, such
+    as efficiency, fill factor, Voc and Jsc."""
+    return _match(content, 'Stability (Parameters)', tail=tail)
 
 
 def match_eqe(path: str, content: str, tail: str) -> tuple | bool:
