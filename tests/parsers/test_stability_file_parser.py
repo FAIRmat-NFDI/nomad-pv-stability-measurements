@@ -49,10 +49,10 @@ def test_UNITOV_file_is_registered_with_kind_sample_and_start(tmp_path):
 
     assert data.file == 'UNITOV/run_1/001_JV.txt'
     assert data.institution == 'UNITOV'
-    assert data.measurement_kind == 'jv'
+    assert data.stability_file_type == 'jv'
     assert data.file_format == 'txt'
     assert data.provenance == 'measured'
-    assert data.sample_id == '3C_C1_1'
+    assert data.sample_identity.sample_id == '3C_C1_1'
     # 18:34:18 local time in Rome, in summer time (UTC+2).
     assert data.start_time == datetime(2023, 10, 19, 16, 34, 18, tzinfo=timezone.utc)
 
@@ -73,7 +73,7 @@ def test_UNITOV_series_are_told_apart(tmp_path, test, algorithm, kind):
 
     data = parse(tmp_path, 'UNITOV/run_1/000_series.txt', content.encode()).data
 
-    assert data.measurement_kind == kind
+    assert data.stability_file_type == kind
     # Each series ends at its last row, half an hour after its start.
     assert data.end_time == datetime(2023, 10, 19, 17, 4, 18, tzinfo=timezone.utc)
 
@@ -97,7 +97,7 @@ def test_UNITOV_file_ends_at_its_last_row_or_else_when_it_starts(tmp_path):
     tracked = parse(tmp_path, tracking_path, UNITOV_LONG_TRACKING.encode()).data
     swept = parse(tmp_path, 'UNITOV/run_1/001_JV.txt', UNITOV_JV.encode()).data
 
-    assert tracked.measurement_kind == 'mpp_tracking'
+    assert tracked.stability_file_type == 'mpp_tracking'
     # Two hours after the start at 18:34:18 in Rome.
     assert tracked.end_time == datetime(2023, 10, 19, 18, 34, 18, tzinfo=timezone.utc)
     assert swept.end_time == swept.start_time
@@ -108,7 +108,7 @@ def test_institution_without_tail_gets_no_end_from_the_last_row(tmp_path, monkey
     tracking_path = 'UNITOV/run_1/000_Tracking.txt'
     tracked = parse(tmp_path, tracking_path, UNITOV_LONG_TRACKING.encode()).data
 
-    assert tracked.measurement_kind == 'mpp_tracking'
+    assert tracked.stability_file_type == 'mpp_tracking'
     assert tracked.end_time == tracked.start_time
 
 
@@ -117,7 +117,7 @@ def test_utf8_header_text_is_kept(tmp_path):
     content = UNITOV_JV.replace('3C_C1_1', 'Zelle_µ1').encode('utf-8')
     data = parse(tmp_path, 'UNITOV/run_1/001_JV.txt', content).data
 
-    assert data.sample_id == 'Zelle_µ1'
+    assert data.sample_identity.sample_id == 'Zelle_µ1'
 
 
 @pytest.mark.parametrize(
@@ -136,8 +136,8 @@ def test_unrecognized_file_is_registered_as_unknown(tmp_path, path, content, log
     assert [log['log_level'] for log in logs] == [log_level]
 
     assert data.file == path
-    assert data.measurement_kind == 'unknown'
-    assert data.sample_id is None
+    assert data.stability_file_type == 'unknown'
+    assert data.sample_identity is None
     assert data.start_time is None
 
 
@@ -160,7 +160,7 @@ def test_file_in_no_institution_folder_belongs_to_the_uploaders_institution(
     data = parse(tmp_path, path, UNITOV_JV.encode(), email).data
 
     assert data.institution == institution
-    assert data.measurement_kind == kind
+    assert data.stability_file_type == kind
 
 
 @pytest.mark.parametrize(
@@ -183,23 +183,30 @@ def test_parser_takes_data_files_but_not_archive_or_hidden_files(path, is_regist
 
 
 @pytest.mark.parametrize(
-    'start_time, end_time, duration',
+    'start_time, end_time, given, duration',
     [
         (
             datetime(2023, 10, 19, 16, tzinfo=timezone.utc),
             datetime(2023, 10, 19, 17, 30, tzinfo=timezone.utc),
+            None,
             1.5,
         ),
-        (datetime(2023, 10, 19, 16, tzinfo=timezone.utc), None, 0),
-        (None, None, None),
+        (datetime(2023, 10, 19, 16, tzinfo=timezone.utc), None, None, 0),
+        (None, None, None, None),
+        # With times, the duration follows from them, whatever was given.
+        (datetime(2023, 10, 19, 16, tzinfo=timezone.utc), None, 5.0, 0),
+        # Without times, as for a simulation over model time, it is kept as given.
+        (None, None, 1000.0, 1000.0),
     ],
 )
-def test_file_entry_knows_how_long_its_measurement_ran(start_time, end_time, duration):
+def test_file_entry_knows_how_long_a_period_its_data_cover(
+    start_time, end_time, given, duration
+):
     from nomad_pv_stability_measurements.schema_packages.schema_package import (
         StabilityFile,
     )
 
-    entry = StabilityFile(start_time=start_time, end_time=end_time)
+    entry = StabilityFile(start_time=start_time, end_time=end_time, duration=given)
     entry.normalize(EntryArchive(data=entry), utils.get_logger(__name__))
 
     if duration is None:

@@ -10,64 +10,55 @@ if TYPE_CHECKING:
         BoundLogger,
     )
 
-from datetime import datetime, timezone, tzinfo
-from pathlib import PurePosixPath
-from urllib.parse import urlencode
 
 import numpy as np
-from nomad.config import config
 from nomad.datamodel.context import ServerContext
-from nomad.datamodel.data import ArchiveSection, EntryData, Schema
+from nomad.datamodel.data import ArchiveSection, EntryData
 from nomad.datamodel.metainfo.annotations import (
     BrowserAdaptors,
     BrowserAnnotation,
-    ELNAnnotation,
     ELNComponentEnum,
-    Filter,
-    SectionDisplayAnnotation,
 )
-from nomad.datamodel.metainfo.basesections import BaseSection
-from nomad.datamodel.metainfo.plot import PlotlyFigure, PlotSection
+from nomad.datamodel.metainfo.plot import PlotSection
 from nomad.metainfo import (
     URL,
     Datetime,
     MEnum,
     Quantity,
     SchemaPackage,
-    Section,
     SubSection,
 )
 from nomad.parsing.tabular import TableData
 from nomad.utils import generate_entry_id
+from nomad_pv_stability_standards.schema_packages.standard import AppliedStandard
 
-from nomad_pv_stability_measurements.file_reading import INSTITUTIONS
-from nomad_pv_stability_measurements.schema_packages.sample_schema import (
-    SolcarCellSample,
+from nomad_pv_stability_measurements.schema_packages.plotting_utils import (
+    file_timeline,
 )
-
-configuration = config.get_plugin_entry_point(
-    'nomad_pv_stability_measurements.schema_packages:schema_package_entry_point'
+from nomad_pv_stability_measurements.schema_packages.sample_schema import (
+    SolarCellSample,
+)
+from nomad_pv_stability_measurements.schema_packages.utils import (
+    GENERAL_GROUP,
+    QUIET,
+    UNKNOWN_SAMPLE,
+    applied_standards,
+    eln,
+    files_app_url,
+    group_of,
+    sample_series,
+    split_commas,
+    stability_file,
+    tabular,
 )
 
 m_package = SchemaPackage()
 
 
-class NewSchemaPackage(Schema):
-    name = Quantity(
-        type=str, a_eln=ELNAnnotation(component=ELNComponentEnum.StringEditQuantity)
-    )
-    message = Quantity(type=str)
-
-    def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
-        super().normalize(archive, logger)
-
-        logger.info('NewSchema.normalize', parameter=configuration.parameter)
-        self.message = f'Hello {self.name}!'
-
-
-#: What was measured in a file. New kinds may be added; existing ones are never
-#: removed or renamed, so that stored entries stay valid.
-MEASUREMENT_KINDS = [
+#: What a file of a stability upload holds, e.g. a J-V curve or an environment
+#: log. New types may be added; existing ones are never removed or renamed, so
+#: that stored entries stay valid.
+STABILITY_FILE_TYPES = [
     'jv',
     'dark_jv',
     'mpp_tracking',
@@ -81,17 +72,25 @@ MEASUREMENT_KINDS = [
     'image',
     'pl_image',
     'el_image',
-    'environment_log',
+    # Logs of the conditions at the test setup: a climate chamber, an oven, the
+    # laboratory, or sensors next to the samples outdoors.
+    'setup_log',
+    # Weather data of an outdoor test site, e.g. from its meteorological station:
+    # irradiance, air temperature, wind, rain.
+    'weather_information',
     'metadata',
     'measurement_protocol',
     'XRD',
     'SEM',
     'other',
     'unknown',
+    # Deprecated: the name of `setup_log` until 2026-11, kept so that stored entries
+    # and spreadsheets stay valid.
+    'environment_log',
 ]
 
 #: How a file is stored, independent of what it contains. Same rule as for
-#: `MEASUREMENT_KINDS`: values are only ever added.
+#: `STABILITY_FILE_TYPES`: values are only ever added.
 FILE_FORMATS = [
     'csv',
     'tsv',
@@ -118,7 +117,7 @@ FILE_FORMATS = [
 ]
 
 #: Where the data of a file comes from, with what each value means. Same rule as for
-#: `MEASUREMENT_KINDS`: values are only ever added.
+#: `STABILITY_FILE_TYPES`: values are only ever added.
 PROVENANCES = {
     'measured': 'Measured on the sample.',
     'simulated': 'Computed by a model of the sample.',
@@ -137,9 +136,33 @@ PROVENANCES = {
 }
 
 
-#: The sample under which the project entry lists the files whose sample is not
-#: known.
-UNKNOWN_SAMPLE = 'Unknown'
+class SampleIdentity(ArchiveSection):
+    """
+    Which sample a file or a series is about: as the institution names it, as the
+    sample entry of the upload, and as an identifier outside the upload.
+    """
+
+    sample_id = Quantity(
+        type=str,
+        description="""
+        The identifier of the sample as the institution writes it, without spaces at
+        its start and end. Empty if nothing gives it.
+        """,
+    )
+    entry = Quantity(
+        type=SolarCellSample,
+        description="""
+        The sample entry of the upload whose identifier is `sample_id`, made from the
+        sheet `samples` of the project data spreadsheet. Empty without such a sample.
+        """,
+    )
+    external_reference = Quantity(
+        type=URL,
+        description="""
+        Where the sample is described outside the upload: an external database, a
+        DOI, or a NOMAD entry of another upload.
+        """,
+    )
 
 
 class StabilityFile(EntryData):
@@ -169,12 +192,14 @@ class StabilityFile(EntryData):
         """,
     )
 
-    measurement_kind = Quantity(
-        type=MEnum(*MEASUREMENT_KINDS),
+    stability_file_type = Quantity(
+        type=MEnum(*STABILITY_FILE_TYPES),
         default='unknown',
+        # The name until 2026-11, so that stored entries keep their value.
+        aliases=['measurement_kind'],
         description="""
-        What was measured. The same file format can hold different kinds of
-        measurements.
+        What the file holds, e.g. a J-V curve, MPP tracking or an environment log.
+        The same file format can hold different types of files.
         """,
     )
 
@@ -187,19 +212,23 @@ class StabilityFile(EntryData):
     start_time = Quantity(
         type=Datetime,
         description="""
-        When the measurement in this file started, as an absolute time. Give a
-        datetime with its time zone, the one where the measurement ran, or in UTC.
-        NOMAD stores it in UTC, and a time without a time zone is read as UTC.
-        Converting a file's local times is the job of the institution's reading code.
+        The start of the period of the stability test that the file's data cover, as
+        an absolute time: for measured data when the recording started, for a
+        simulation of the test the start of the period it simulates. Empty where the
+        data have no time in the calendar, such as a simulation over model time; then
+        `duration` may give their length. Give a datetime with its time zone, the one
+        where the data were taken, or in UTC. NOMAD stores it in UTC, and a time
+        without a time zone is read as UTC. Converting a file's local times is the job
+        of the institution's reading code.
         """,
     )
 
     end_time = Quantity(
         type=Datetime,
         description="""
-        When the measurement in this file finished, as an absolute time, with the
-        same time zone rule as `start_time`. Equal to `start_time` if nothing gives
-        an end, as for a measurement that takes only seconds.
+        The end of the period that the file's data cover, as an absolute time, with
+        the same rules as `start_time`. Equal to `start_time` if nothing gives an end,
+        as for data taken within seconds, such as a J-V scan.
         """,
     )
 
@@ -212,65 +241,27 @@ class StabilityFile(EntryData):
         """,
     )
 
-    sample_id = Quantity(
-        type=str,
-        description="""
-        The identifier of the measured sample as the institution writes it, without
-        spaces at its start and end. Empty if nothing gives it.
-        """,
-    )
-
-    sample_reference = Quantity(
-        type=str,
-        description="""
-        A URI identifying the sample: a NOMAD entry, an external database, or any
-        other resolvable identifier.
-        """,
-    )
-
-    sample = Quantity(
-        type=SolcarCellSample,
-        description="""
-        The sample entry of the upload whose identifier is the file's `sample_id`,
-        made from the sheet `samples` of the project data spreadsheet. Empty without
-        such a sample.
-        """,
+    sample_identity = SubSection(
+        section_def=SampleIdentity,
+        description='The sample the file is about. Empty if nothing names one.',
     )
 
     duration = Quantity(
         type=np.float64,
         unit='hour',
         description="""
-        How long the measurement ran, from `start_time` to `end_time`; zero for a
-        measurement without an end time. Derived on normalization. Empty without a
-        start time.
+        How long a period the file's data cover. With a `start_time`, derived on
+        normalization from `start_time` to `end_time`, zero without an end time.
+        Without a `start_time`, as given, e.g. in the sheet `files`: for a simulation
+        over 1000 h of model time, 1000; empty if nothing gives it.
         """,
     )
 
     def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
         super().normalize(archive, logger)
-        self.duration = None
         if self.start_time is not None:
             end_time = self.end_time or self.start_time
             self.duration = (end_time - self.start_time).total_seconds() / 3600
-
-
-def _tabular(column: str) -> dict:
-    """The tabular annotation that reads a quantity from the column `column` of the
-    first sheet of a spreadsheet."""
-    return {'name': column}
-
-
-def _eln(component: ELNComponentEnum) -> ELNAnnotation:
-    return ELNAnnotation(component=component)
-
-
-def _split_commas(values) -> list[str] | None:
-    """`values` with every value split at commas and stripped; `None` if empty."""
-    if values is None:
-        return None
-    items = [item.strip() for value in values for item in str(value).split(',')]
-    return [item for item in items if item] or None
 
 
 class StabilityFileReference(ArchiveSection):
@@ -293,24 +284,46 @@ class StabilityFileReference(ArchiveSection):
     )
 
 
-class StabilitySampleGroup(ArchiveSection):
-    """The files of one sample of a stability upload, in the order they were measured.
-    What is known about the sample is in the files' entries."""
+class StabilityFileGroup(ArchiveSection):
+    """A group of files of a stability upload, ordered by when their data start:
+    either the series of one sample, its stability test, with the sample and the
+    standards applied to it; or the files that belong to no sample, of a general type
+    (`GENERAL_FILE_TYPES`, e.g. `Setup logs`, and `GENERAL_GROUP`) or of an unknown
+    sample (`UNKNOWN_SAMPLE`), without sample and standards. What is known about each
+    file is in its entry."""
 
-    sample_id = Quantity(
+    name = Quantity(
         type=str,
         description=f"""
-        The identifier of the sample as the institution writes it, or
-        `{UNKNOWN_SAMPLE}` for the files whose sample is not known. A sample that the
-        institution itself names `{UNKNOWN_SAMPLE}` shares that group.
+        The name of the group: the sample's identifier, the name of a general type of
+        files (e.g. `Setup logs` or `{GENERAL_GROUP}`), or `{UNKNOWN_SAMPLE}`.
+        """,
+    )
+    sample_identity = SubSection(
+        section_def=SampleIdentity,
+        description=f"""
+        The sample of a sample's series; empty for the other groups. A sample that
+        the institution itself names `{UNKNOWN_SAMPLE}` shares the group of the files
+        without sample.
+        """,
+    )
+    applied_standards = SubSection(
+        section_def=AppliedStandard,
+        repeats=True,
+        description="""
+        The standards applied to the sample, one after the other or at once, each with
+        the choices made among its options, referencing the standard in a catalogue
+        every user can see. Set from the column `standard` of the sheet `samples` on
+        import, in its order; edits stay until the next import. Only for a sample's
+        series.
         """,
     )
     files = SubSection(
         section_def=StabilityFileReference,
         repeats=True,
         description="""
-        One record per file of the sample, ordered by start time. Files without a start
-        time come last.
+        One record per file of the group, ordered by start time. Files without a
+        start time come last.
         """,
     )
 
@@ -318,10 +331,11 @@ class StabilitySampleGroup(ArchiveSection):
 class ProjectData(PlotSection, EntryData, TableData):
     """
     One stability upload as a project: the proposal as submitted in GATE
-    (READY-PV), the standards used and the samples, which can be edited, and an
-    overview of the upload's files, which is derived on every normalization: the
-    institutions, the files grouped by sample, a link to the app "Stability files",
-    and a timeline of when each sample was measured.
+    (READY-PV) and the samples, which can be edited, and an overview of the upload's
+    files, which is derived on every normalization: the institutions, the file
+    groups (the files of each sample, with the standard applied to it, and of each
+    general type, such as the environment), a link to the app "Stability files", and
+    a timeline of the periods that the files' data cover.
 
     The plugin creates it for every upload. The editable part is filled from the
     spreadsheet `data_file` while "fill archive from data file" is ticked: the first
@@ -330,8 +344,8 @@ class ProjectData(PlotSection, EntryData, TableData):
     spreadsheet is imported again. The sheet `files` is read by the file entries
     themselves; an import only checks it and reports its errors here.
 
-    The timeline has one row per sample and one line per file from its start to
-    its end, coloured by measurement kind.
+    The timeline has one row per group and one line per file from its start to
+    its end, coloured by stability file type.
     """
 
     data_file = Quantity(
@@ -345,164 +359,9 @@ class ProjectData(PlotSection, EntryData, TableData):
             ]
         },
         a_browser=BrowserAnnotation(adaptor=BrowserAdaptors.RawFileAdaptor),
-        a_eln=_eln(ELNComponentEnum.FileEditQuantity),
+        a_eln=eln(ELNComponentEnum.FileEditQuantity),
     )
 
-    proposal_number = Quantity(
-        type=str,
-        description='The number of the proposal in GATE (READY-PV).',
-        a_tabular=_tabular('proposal_number'),
-        a_eln=_eln(ELNComponentEnum.StringEditQuantity),
-    )
-    proposal = Quantity(
-        type=str,
-        description='A URI of the proposal under which these measurements were made.',
-        a_tabular=_tabular('proposal'),
-        a_eln=_eln(ELNComponentEnum.URLEditQuantity),
-    )
-    title = Quantity(
-        type=str,
-        description='GATE, general proposal data: title (max. 500 characters).',
-        a_tabular=_tabular('title'),
-        a_eln=_eln(ELNComponentEnum.StringEditQuantity),
-    )
-    abstract = Quantity(
-        type=str,
-        description='GATE, general proposal data: abstract (max. 1000 characters).',
-        a_tabular=_tabular('abstract'),
-        a_eln=_eln(ELNComponentEnum.RichTextEditQuantity),
-    )
-    main_research_area = Quantity(
-        type=str,
-        description='GATE, general proposal data: main research area.',
-        a_tabular=_tabular('main_research_area'),
-        a_eln=_eln(ELNComponentEnum.StringEditQuantity),
-    )
-    scientific_category = Quantity(
-        type=str,
-        description='GATE, general proposal data: scientific category.',
-        a_tabular=_tabular('scientific_category'),
-        a_eln=_eln(ELNComponentEnum.StringEditQuantity),
-    )
-    funding_requested = Quantity(
-        type=bool,
-        description='GATE, general proposal data: whether funding was requested.',
-        a_tabular=_tabular('funding_requested'),
-        a_eln=_eln(ELNComponentEnum.BoolEditQuantity),
-    )
-    proposer = Quantity(
-        type=str,
-        description='GATE: the proposer, who submitted the proposal.',
-        a_tabular=_tabular('proposer'),
-        a_eln=_eln(ELNComponentEnum.StringEditQuantity),
-    )
-    co_proposers = Quantity(
-        type=str,
-        shape=['*'],
-        description='GATE: the co-proposers; in the spreadsheet separated by commas.',
-        a_tabular=_tabular('co_proposers'),
-        a_eln=_eln(ELNComponentEnum.StringEditQuantity),
-    )
-    installation = Quantity(
-        type=str,
-        description="""
-        GATE, technical requirements: the installation (instrument) of the
-        proposal; one per proposal.
-        """,
-        a_tabular=_tabular('installation'),
-        a_eln=_eln(ELNComponentEnum.StringEditQuantity),
-    )
-    instrument_scientist = Quantity(
-        type=str,
-        description='GATE, technical requirements: the contacted instrument scientist.',
-        a_tabular=_tabular('instrument_scientist'),
-        a_eln=_eln(ELNComponentEnum.StringEditQuantity),
-    )
-    experiment_start = Quantity(
-        type=Datetime,
-        description="""
-        The start of the allocated experiment time, as ISO text, e.g. 2026-09-13;
-        without a time zone read as UTC.
-        """,
-        a_tabular=_tabular('experiment_start'),
-        a_eln=_eln(ELNComponentEnum.DateTimeEditQuantity),
-    )
-    experiment_end = Quantity(
-        type=Datetime,
-        description='The end of the allocated experiment time, as `experiment_start`.',
-        a_tabular=_tabular('experiment_end'),
-        a_eln=_eln(ELNComponentEnum.DateTimeEditQuantity),
-    )
-    proposal_file = Quantity(
-        type=str,
-        description="""
-        The proposal as PDF from GATE ("Preview proposal"), path in the upload.
-        """,
-        a_tabular=_tabular('proposal_file'),
-        a_browser=BrowserAnnotation(adaptor=BrowserAdaptors.RawFileAdaptor),
-        a_eln=_eln(ELNComponentEnum.FileEditQuantity),
-    )
-    scientific_case_file = Quantity(
-        type=str,
-        description="""
-        GATE, general proposal data: the scientific case and results expected (one
-        page PDF), path in the upload.
-        """,
-        a_tabular=_tabular('scientific_case_file'),
-        a_browser=BrowserAnnotation(adaptor=BrowserAdaptors.RawFileAdaptor),
-        a_eln=_eln(ELNComponentEnum.FileEditQuantity),
-    )
-    experimental_plan_file = Quantity(
-        type=str,
-        description="""
-        GATE, technical requirements: the experimental plan (one page PDF), path in
-        the upload.
-        """,
-        a_tabular=_tabular('experimental_plan_file'),
-        a_browser=BrowserAnnotation(adaptor=BrowserAdaptors.RawFileAdaptor),
-        a_eln=_eln(ELNComponentEnum.FileEditQuantity),
-    )
-    report_file = Quantity(
-        type=str,
-        description="""
-        GATE, after the experiment time: the first result PDF of the experimental
-        report, path in the upload.
-        """,
-        a_tabular=_tabular('report_file'),
-        a_browser=BrowserAnnotation(adaptor=BrowserAdaptors.RawFileAdaptor),
-        a_eln=_eln(ELNComponentEnum.FileEditQuantity),
-    )
-    standards = Quantity(
-        type=str,
-        shape=['*'],
-        description="""
-        The stability protocols the measurements follow, e.g. ISOS-L-1; in the
-        spreadsheet separated by commas.
-        """,
-        a_tabular=_tabular('standards'),
-        a_eln=_eln(ELNComponentEnum.StringEditQuantity),
-    )
-
-    samples = Quantity(
-        type=SolcarCellSample,
-        shape=['*'],
-        description="""
-        The sample entries of the project, written from the sheet `samples` on
-        every import.
-        """,
-        a_eln=_eln(ELNComponentEnum.ReferenceEditQuantity),
-    )
-
-    institutions = Quantity(
-        type=str,
-        shape=['*'],
-        description="""
-        Short names of the institutions that measured the files of this upload, one
-        per institution folder, and that of the uploader's email domain if files lie
-        in no institution's folder. Derived from the files; values entered here are
-        replaced.
-        """,
-    )
     files_app = Quantity(
         type=URL,
         description="""
@@ -511,14 +370,170 @@ class ProjectData(PlotSection, EntryData, TableData):
         """,
     )
 
-    file_groups = SubSection(
-        section_def=StabilitySampleGroup,
+    proposal_number = Quantity(
+        type=str,
+        description='The number of the proposal in GATE (READY-PV).',
+        a_tabular=tabular('proposal_number'),
+        a_eln=eln(ELNComponentEnum.StringEditQuantity),
+    )
+    proposal = Quantity(
+        type=str,
+        description='A URI of the proposal under which the data of this upload were '
+        'taken.',
+        a_tabular=tabular('proposal'),
+        a_eln=eln(ELNComponentEnum.URLEditQuantity),
+    )
+    title = Quantity(
+        type=str,
+        description='GATE, general proposal data: title (max. 500 characters).',
+        a_tabular=tabular('title'),
+        a_eln=eln(ELNComponentEnum.StringEditQuantity),
+    )
+    abstract = Quantity(
+        type=str,
+        description='GATE, general proposal data: abstract (max. 1000 characters).',
+        a_tabular=tabular('abstract'),
+        a_eln=eln(ELNComponentEnum.RichTextEditQuantity),
+    )
+    main_research_area = Quantity(
+        type=str,
+        description='GATE, general proposal data: main research area.',
+        a_tabular=tabular('main_research_area'),
+        a_eln=eln(ELNComponentEnum.StringEditQuantity),
+    )
+    scientific_category = Quantity(
+        type=str,
+        description='GATE, general proposal data: scientific category.',
+        a_tabular=tabular('scientific_category'),
+        a_eln=eln(ELNComponentEnum.StringEditQuantity),
+    )
+    funding_requested = Quantity(
+        type=bool,
+        description='GATE, general proposal data: whether funding was requested.',
+        a_tabular=tabular('funding_requested'),
+        a_eln=eln(ELNComponentEnum.BoolEditQuantity),
+    )
+    proposer = Quantity(
+        type=str,
+        description='GATE: the proposer, who submitted the proposal.',
+        a_tabular=tabular('proposer'),
+        a_eln=eln(ELNComponentEnum.StringEditQuantity),
+    )
+    co_proposers = Quantity(
+        type=str,
+        shape=['*'],
+        description='GATE: the co-proposers; in the spreadsheet separated by commas.',
+        a_tabular=tabular('co_proposers'),
+        a_eln=eln(ELNComponentEnum.StringEditQuantity),
+    )
+    installation = Quantity(
+        type=str,
+        description="""
+        GATE, technical requirements: the installation (instrument) of the
+        proposal; one per proposal.
+        """,
+        a_tabular=tabular('installation'),
+        a_eln=eln(ELNComponentEnum.StringEditQuantity),
+    )
+    instrument_scientist = Quantity(
+        type=str,
+        description='GATE, technical requirements: the contacted instrument scientist.',
+        a_tabular=tabular('instrument_scientist'),
+        a_eln=eln(ELNComponentEnum.StringEditQuantity),
+    )
+    experiment_start = Quantity(
+        type=Datetime,
+        description="""
+        The start of the allocated experiment time, as ISO text, e.g. 2026-09-13;
+        without a time zone read as UTC.
+        """,
+        a_tabular=tabular('experiment_start'),
+        a_eln=eln(ELNComponentEnum.DateTimeEditQuantity),
+    )
+    experiment_end = Quantity(
+        type=Datetime,
+        description='The end of the allocated experiment time, as `experiment_start`.',
+        a_tabular=tabular('experiment_end'),
+        a_eln=eln(ELNComponentEnum.DateTimeEditQuantity),
+    )
+    proposal_file = Quantity(
+        type=str,
+        description="""
+        The proposal as PDF from GATE ("Preview proposal"), path in the upload.
+        """,
+        a_tabular=tabular('proposal_file'),
+        a_browser=BrowserAnnotation(adaptor=BrowserAdaptors.RawFileAdaptor),
+        a_eln=eln(ELNComponentEnum.FileEditQuantity),
+    )
+    scientific_case_file = Quantity(
+        type=str,
+        description="""
+        GATE, general proposal data: the scientific case and results expected (one
+        page PDF), path in the upload.
+        """,
+        a_tabular=tabular('scientific_case_file'),
+        a_browser=BrowserAnnotation(adaptor=BrowserAdaptors.RawFileAdaptor),
+        a_eln=eln(ELNComponentEnum.FileEditQuantity),
+    )
+    experimental_plan_file = Quantity(
+        type=str,
+        description="""
+        GATE, technical requirements: the experimental plan (one page PDF), path in
+        the upload.
+        """,
+        a_tabular=tabular('experimental_plan_file'),
+        a_browser=BrowserAnnotation(adaptor=BrowserAdaptors.RawFileAdaptor),
+        a_eln=eln(ELNComponentEnum.FileEditQuantity),
+    )
+    report_file = Quantity(
+        type=str,
+        description="""
+        GATE, after the experiment time: the first result PDF of the experimental
+        report, path in the upload.
+        """,
+        a_tabular=tabular('report_file'),
+        a_browser=BrowserAnnotation(adaptor=BrowserAdaptors.RawFileAdaptor),
+        a_eln=eln(ELNComponentEnum.FileEditQuantity),
+    )
+    samples = Quantity(
+        type=SolarCellSample,
+        shape=['*'],
+        description="""
+        The sample entries of the project, written from the sheet `samples` on
+        every import.
+        """,
+        a_eln=eln(ELNComponentEnum.ReferenceEditQuantity),
+    )
+
+    institutions = Quantity(
+        type=str,
+        shape=['*'],
+        description="""
+        Short names of the institutions that the files of this upload come from, one
+        per institution folder, and that of the uploader's email domain if files lie
+        in no institution's folder. Derived from the files; values entered here are
+        replaced.
+        """,
+    )
+
+    sample_series = SubSection(
+        section_def=StabilityFileGroup,
+        repeats=True,
+        description="""
+        One series per sample, with the standards applied to it, ordered by sample
+        identifier. The files are derived on every normalization; the applied
+        standards are set on import and otherwise kept, also for a sample without
+        files.
+        """,
+    )
+    general_groups = SubSection(
+        section_def=StabilityFileGroup,
         repeats=True,
         description=f"""
-        Every file of the upload, grouped by sample, ordered by sample identifier.
-        Each file is in exactly one group; the files whose sample is not known are in
-        a last group `{UNKNOWN_SAMPLE}`. Derived from the files; records
-        entered here are replaced.
+        The files that belong to no sample: one group per general type of files
+        (`GENERAL_FILE_TYPES`), such as the setup logs, and `{GENERAL_GROUP}`; last
+        `{UNKNOWN_SAMPLE}`, the files whose sample is not known. Derived on every
+        normalization. Each file of the upload is in exactly one series or group.
         """,
     )
 
@@ -526,19 +541,22 @@ class ProjectData(PlotSection, EntryData, TableData):
         """Reads the spreadsheet if "fill archive from data file" is ticked: the
         first sheet into the quantities here, the sheet `samples` into sample
         entries, and the sheet `files` only to report its errors. Comma separated
-        lists are split. Sample entries are only written during NOMAD's processing.
-        Without `data_file`, the upload's `project_data.xlsx` is taken and imported.
+        lists are split. On import, the column `standard` of the sheet `samples` gives
+        each sample's applied standards. Sample entries are only written during
+        NOMAD's processing. Without `data_file`, the upload's `project_data.xlsx` is
+        taken and imported.
 
-        Then derives the overview: every registered file of the upload grouped by
-        its sample, with a reference to the file's entry, `institutions` from the
-        files' institution folders or else the uploader's email domain, and the
-        timeline. A file without sample, or that cannot be read, is in the group
-        `UNKNOWN_SAMPLE`."""
+        Then derives the overview: every registered file of the upload in a series,
+        of its sample or of its general kind (`GENERAL_FILE_TYPES`), with a reference
+        to the file's entry, `institutions` from the files' institution folders or
+        else the uploader's email domain, and the timeline. A file of no general kind
+        without sample, or that cannot be read, is in the series `UNKNOWN_SAMPLE`."""
         # Imported here, because the module imports this one.
-        from nomad_pv_stability_measurements.project_data import (
+        from nomad_pv_stability_measurements.parsers.project_data_utils import (
             PROJECT_DATA_FILE,
             file_rows,
             read_sheets,
+            sample_standards,
             write_sample_entries,
         )
 
@@ -556,42 +574,56 @@ class ProjectData(PlotSection, EntryData, TableData):
             # NOMAD's tabular parser fills only empty quantities of the first sheet;
             # an import replaces them all.
             for quantity in self.m_def.all_quantities.values():
-                tabular = quantity.m_get_annotations('tabular')
-                if tabular is not None and '/' not in tabular.name:
+                annotation = quantity.m_get_annotations('tabular')
+                if annotation is not None and '/' not in annotation.name:
                     self.m_set(quantity, None)
         super().normalize(archive, logger)
 
-        self.standards = _split_commas(self.standards)
-        self.co_proposers = _split_commas(self.co_proposers)
+        self.co_proposers = split_commas(self.co_proposers)
 
+        standards = None
         if importing and server:
             data = read_sheets(context, self.data_file)
             file_rows(data, logger)
             self.samples = write_sample_entries(context, data, logger)
+            standards = sample_standards(data)
 
-        self._derive_overview(archive, logger)
+        self._derive_overview(archive, logger, standards)
 
-    def _derive_overview(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
+    def _derive_overview(
+        self,
+        archive: 'EntryArchive',
+        logger: 'BoundLogger',
+        standards: dict[str, list[str]] | None = None,
+    ) -> None:
         """Derives the institutions, the file groups, the link to the app and the
         timeline from the upload's files.
+
+        The samples' applied standards are kept by sample identifier; on import,
+        `standards` (the written standards by sample identifier) replaces them,
+        keeping an applied standard that is written the same, with its edits.
 
         Each file's values are found exactly as for its own entry, by
         `file_values`, so the overview does not depend on whether the files'
         entries are processed yet. Problems of single files are reported by their
         entries, not here."""
         # Imported here, because these modules import this one.
+        from nomad_pv_stability_measurements.parsers.project_data_utils import (
+            load_spreadsheet,
+        )
         from nomad_pv_stability_measurements.parsers.stability_file_parser import (
             file_values,
+        )
+        from nomad_pv_stability_measurements.parsers.utils import (
             institution_of,
             is_registered,
             uploader_email,
         )
-        from nomad_pv_stability_measurements.project_data import load_spreadsheet
 
         upload_files = getattr(archive.m_context, 'upload_files', None)
         upload_id = archive.metadata.upload_id if archive.metadata else None
         if upload_id is not None:
-            self.files_app = _files_app_url(upload_id)
+            self.files_app = files_app_url(upload_id)
         if upload_files is None or upload_id is None:
             return
 
@@ -618,371 +650,51 @@ class ProjectData(PlotSection, EntryData, TableData):
         for path in paths:
             try:
                 with upload_files.raw_file(path, 'rb') as file:
-                    values = file_values(path, file, _QUIET, email, spreadsheet)
-                entries[path] = StabilityFile(**values)
+                    values = file_values(path, file, QUIET, email, spreadsheet)
+                entries[path] = stability_file(values)
             except Exception as error:
                 logger.warning('could not read a file', file=path, exc_info=error)
                 entries[path] = None
 
-        by_sample: dict[str, StabilitySampleGroup] = {}
+        applied = applied_standards(self.sample_series, standards, logger)
+        sample_ids = spreadsheet.sample_ids if spreadsheet else frozenset()
+        groups: dict[tuple, StabilityFileGroup] = {
+            (0, sample_id): sample_series(sample_id, sample_ids)
+            for sample_id in applied
+        }
         for path in paths:
-            entry = entries[path]
-            sample_id = (entry.sample_id if entry else None) or UNKNOWN_SAMPLE
-            group = by_sample.setdefault(
-                sample_id, StabilitySampleGroup(sample_id=sample_id)
-            )
+            key, name = group_of(entries[path])
+            if key not in groups:
+                groups[key] = (
+                    sample_series(name, sample_ids)
+                    if key[0] == 0
+                    else StabilityFileGroup(name=name)
+                )
+            group = groups[key]
             group.files.append(
                 StabilityFileReference(file=path, entry=references[path])
             )
 
-        def measured_first(record):
+        def earliest_first(record):
             entry = entries[record.file]
             start_time = entry.start_time if entry else None
             # Put missing times last and use the file path to break ties.
             return (start_time is None, start_time, record.file)
 
-        # Order groups by sample identifier, with the unknown-sample group last.
-        ordered_ids = sorted(
-            by_sample, key=lambda sample_id: (sample_id == UNKNOWN_SAMPLE, sample_id)
+        for group in groups.values():
+            group.files = sorted(group.files, key=earliest_first)
+        # The key's first element tells a sample's series (0) from the others.
+        self.sample_series = [groups[key] for key in sorted(groups) if key[0] == 0]
+        self.general_groups = [groups[key] for key in sorted(groups) if key[0] != 0]
+        for series in self.sample_series:
+            series.applied_standards = applied.get(series.sample_identity.sample_id, [])
+            for standard in series.applied_standards:
+                # Added after NOMAD normalized the sub-sections, so normalized here.
+                standard.normalize(archive, logger)
+
+        self.figures = file_timeline(
+            [*self.sample_series, *self.general_groups], entries
         )
-        self.file_groups = []
-        for sample_id in ordered_ids:
-            group = by_sample[sample_id]
-            group.files = sorted(group.files, key=measured_first)
-            self.file_groups.append(group)
-
-        self.figures = _measurement_timeline(self.file_groups, entries)
-
-
-class _QuietLogger:
-    """A logger that drops every message."""
-
-    def __getattr__(self, name):
-        return lambda *args, **kwargs: None
-
-
-_QUIET = _QuietLogger()
-
-
-class StabilityUploadSummary(ProjectData, BaseSection):
-    """
-    Deprecated: the earlier summary of a stability upload, now part of
-    `ProjectData`. Kept so that stored summaries, whose files are
-    `stability_upload.archive.json`, `.yaml` or `.yml`, still load; such an upload
-    keeps its summary as its project entry. New uploads get `ProjectData`.
-    """
-
-    # The quantities of the base section were never filled; not shown.
-    m_def = Section(
-        a_display=SectionDisplayAnnotation(
-            visible=Filter(exclude=['lab_id', 'datetime', 'name', 'description'])
-        )
-    )
-
-
-#: Sizes in the measurement timeline, in pixels: of the circle at a file's start,
-#: of the smaller triangle at its end, which hides behind the circle when zoomed
-#: out, and of the line between them, thinner still so the triangle stands out.
-TIMELINE_START_SIZE = 10
-TIMELINE_END_SIZE = 7
-TIMELINE_LINE_WIDTH = 3
-
-#: How opaque a file's line is, so that overlapping files stay visible. The
-#: markers at its start and end are opaque.
-TIMELINE_LINE_OPACITY = 0.35
-
-#: The colours of the measurement kinds in the timeline. NOMAD's GUI shows a figure
-#: on a light or a dark background, so each colour keeps a contrast of at least 3:1
-#: to white and to near-black, and the colours stay apart for colour-blind readers.
-#: Other kinds are grey; the hover text names them.
-TIMELINE_KIND_COLORS = {
-    'jv': '#3987e5',
-    'dark_jv': '#d95926',
-    'mpp_tracking': '#199e70',
-    'stability_series': '#c98500',
-    'jv_parameters': '#d55181',
-    'eqe': '#008300',
-    'pl': '#9085e9',
-    'el': '#e66767',
-}
-TIMELINE_OTHER_COLOR = '#8c8c8c'
-
-#: The outline of the markers: a mid grey, which stands out on a light and on a
-#: dark background, and around a marker over another one.
-TIMELINE_OUTLINE_COLOR = '#808080'
-TIMELINE_OUTLINE_WIDTH = 0.5
-
-#: Space above the timeline for the legend, in pixels.
-TIMELINE_LEGEND_HEIGHT = 50
-
-#: The part of a sample's row over which the kinds are spread, in rows.
-TIMELINE_ROW_SPREAD = 0.6
-
-#: The Plotly marker symbols at the start and the end of a measurement.
-TIMELINE_START_SYMBOL = 'circle'
-TIMELINE_END_SYMBOL = 'triangle-up'
-
-#: The legend entries that explain the start and end markers.
-TIMELINE_START_LEGEND = 'start_time'
-TIMELINE_END_LEGEND = 'end_time'
-
-#: The hover text of a file's markers.
-TIMELINE_HOVER = (
-    '<b>%{customdata[0]}</b><br>'
-    'sample_id: %{customdata[1]}<br>'
-    'start_time: %{customdata[2]}<br>'
-    'end_time: %{customdata[3]}<br>'
-    # `<extra></extra>` leaves out the box with the trace's name.
-    'type: %{customdata[4]}<extra></extra>'
-)
-
-
-def _measurement_timeline(
-    file_groups: list[StabilitySampleGroup], entries: dict
-) -> list[PlotlyFigure]:
-    """A figure with one row per sample and one line per file from the start to the
-    end of its measurement, coloured by measurement kind. Hovering over a file's
-    markers shows the file name, its sample, start and end time, and kind. A circle
-    marks the start and a smaller triangle the end, both in the kind's full colour
-    with a grey outline; the thinner line between them is translucent, so that
-    overlapping files stay visible. Circles are drawn over all triangles, and these
-    over all lines. A file that ends when it starts is one circle. The legend shows
-    each kind as a line, which shows and hides the kind's files, and the two markers
-    in grey.
-
-    Every trace, legend entries included, holds data and no gaps: NOMAD's new GUI
-    does not show traces without data, nor their legend entries.
-
-    Within a sample's row, each kind of the upload has its own slight vertical
-    offset, so that files of different kinds over the same time stay apart.
-
-    Files without start time are not plotted, and a sample without such files, the
-    group `UNKNOWN_SAMPLE` included, has no row. Without any plottable file, no
-    figure. Rows keep the order of `file_groups`, top to bottom. Each kind has the
-    colour of `TIMELINE_KIND_COLORS`, the same in every upload. An entry made before
-    end times existed ends when it starts. Times are in the zone given by
-    `_timeline_time_zone`."""
-    import plotly.graph_objects as go
-    from plotly.colors import hex_to_rgb
-
-    def plottable(record):
-        entry = entries[record.file]
-        return entry is not None and entry.start_time is not None
-
-    rows = [group for group in file_groups if any(map(plottable, group.files))]
-    sample_ids = [group.sample_id for group in rows]
-    files_by_kind: dict[str, list] = {}
-    for row, group in enumerate(rows):
-        for record in filter(plottable, group.files):
-            entry = entries[record.file]
-            files_by_kind.setdefault(entry.measurement_kind or 'unknown', []).append(
-                (row, group.sample_id, record.file, entry)
-            )
-    if not files_by_kind:
-        return []
-
-    zone = _timeline_time_zone(
-        entry for files in files_by_kind.values() for *_, entry in files
-    )
-
-    def local(time: datetime) -> datetime:
-        # Plotly ignores time zones, so the times are given as written in `zone`.
-        if time.tzinfo is None:
-            time = time.replace(tzinfo=timezone.utc)
-        return time.astimezone(zone).replace(tzinfo=None)
-
-    kinds = sorted(files_by_kind, key=MEASUREMENT_KINDS.index)
-    spacing = TIMELINE_ROW_SPREAD / max(len(kinds) - 1, 1)
-    outline = dict(color=TIMELINE_OUTLINE_COLOR, width=TIMELINE_OUTLINE_WIDTH)
-    lines, ends, starts = [], [], []
-    for index, kind in enumerate(kinds):
-        offset = (index - (len(kinds) - 1) / 2) * spacing
-        red, green, blue = hex_to_rgb(
-            TIMELINE_KIND_COLORS.get(kind, TIMELINE_OTHER_COLOR)
-        )
-        color = _rgba(red, green, blue)
-        line_color = _rgba(red, green, blue, TIMELINE_LINE_OPACITY)
-        # The start and the end of each file, with its hover text.
-        start_points, end_points = [], []
-        for row, sample_id, path, entry in files_by_kind[kind]:
-            start = local(entry.start_time)
-            end = local(entry.end_time or entry.start_time)
-            text = (
-                PurePosixPath(path).name,
-                sample_id,
-                f'{start:%Y-%m-%d %H:%M:%S}',
-                f'{end:%Y-%m-%d %H:%M:%S}',
-                kind,
-            )
-            start_points.append((start, row + offset, text))
-            if end != start:
-                end_points.append((end, row + offset, text))
-                # The kind's first line also is its legend entry.
-                lines.append(
-                    go.Scatter(
-                        x=[start, end],
-                        y=[row + offset] * 2,
-                        name=kind,
-                        legendgroup=kind,
-                        showlegend=False,
-                        mode='lines',
-                        line=dict(color=line_color, width=TIMELINE_LINE_WIDTH),
-                        hoverinfo='skip',
-                    )
-                )
-
-        def markers(points, symbol, size, kind=kind, color=color):
-            x, y, hover = zip(*points)
-            return go.Scatter(
-                x=x,
-                y=y,
-                customdata=hover,
-                name=kind,
-                legendgroup=kind,
-                showlegend=False,
-                mode='markers',
-                marker=dict(
-                    color=color, symbol=symbol, size=size, opacity=1, line=outline
-                ),
-                hovertemplate=TIMELINE_HOVER,
-            )
-
-        starts.append(markers(start_points, TIMELINE_START_SYMBOL, TIMELINE_START_SIZE))
-        if end_points:
-            ends.append(markers(end_points, TIMELINE_END_SYMBOL, TIMELINE_END_SIZE))
-
-        # The kind's legend entry: a line of its colour, with data, but a single
-        # point, which a line does not draw.
-        lines.append(
-            go.Scatter(
-                x=[start_points[0][0]],
-                y=[start_points[0][1]],
-                name=kind,
-                legendgroup=kind,
-                mode='lines',
-                line=dict(color=color, width=TIMELINE_LINE_WIDTH),
-                hoverinfo='skip',
-            )
-        )
-
-    # The legend entries of the markers, in grey, each with one point below the
-    # rows, out of the fixed range of the y-axis, and so never drawn.
-    first_start = min(trace.x[0] for trace in starts)
-    legend_markers = [
-        go.Scatter(
-            x=[first_start],
-            y=[len(sample_ids) + 10],
-            name=name,
-            mode='markers',
-            marker=dict(
-                color=TIMELINE_OTHER_COLOR, symbol=symbol, size=size, line=outline
-            ),
-            hoverinfo='skip',
-        )
-        for name, symbol, size in (
-            (TIMELINE_START_LEGEND, TIMELINE_START_SYMBOL, TIMELINE_START_SIZE),
-            (TIMELINE_END_LEGEND, TIMELINE_END_SYMBOL, TIMELINE_END_SIZE),
-        )
-    ]
-    figure = go.Figure(data=[*lines, *ends, *starts, *legend_markers])
-
-    # Enough room per row that the kinds' offsets stay apart.
-    row_height = max(20, 6 * len(kinds))
-    figure.update_layout(
-        template='plotly_white',
-        showlegend=True,
-        # NOMAD's GUI fixes the margins at the left and right of the plot, which
-        # cuts off a legend at the right; above the plot, in the space kept by the
-        # top margin, it stays visible.
-        legend=dict(
-            orientation='h',
-            x=0,
-            xanchor='left',
-            y=1.02,
-            yanchor='bottom',
-            # In the order of the traces: the kinds, then the markers.
-            traceorder='normal',
-        ),
-        # NOMAD's new GUI replaces a figure's template by its own, which turns
-        # hovering off; set here, hovering stays on.
-        hovermode='closest',
-        # NOMAD's GUI fixes the margins once the figure is first drawn. Tick labels
-        # of one line at every zoom level, which Plotly's default date ticks are
-        # not, and a few of them, so they never turn, keep the space below the axis
-        # the same when zooming, and the title clear of the labels.
-        xaxis=dict(
-            title=dict(text=f'Time ({zone})', standoff=15),
-            tickformatstops=[
-                dict(dtickrange=[None, 60_000], value='%b %d %H:%M:%S'),
-                dict(dtickrange=[60_000, 86_400_000], value='%b %d %H:%M'),
-                dict(dtickrange=[86_400_000, None], value='%b %d, %Y'),
-            ],
-            nticks=6,
-            tickangle=0,
-            automargin=True,
-            # NOMAD's GUI template fixes the x-axis range; set here, scrolling zooms
-            # in time.
-            fixedrange=False,
-        ),
-        margin=dict(t=TIMELINE_LEGEND_HEIGHT, b=80),
-        yaxis=dict(
-            title='Sample',
-            tickmode='array',
-            tickvals=list(range(len(sample_ids))),
-            ticktext=sample_ids,
-            range=[len(sample_ids) - 0.5, -0.5],
-            # NOMAD's GUI template would fit the range to the data instead.
-            autorange=False,
-            zeroline=False,
-            showgrid=False,
-            # The rows stay put when scrolling, which zooms in time only.
-            fixedrange=True,
-        ),
-        height=max(400, 150 + TIMELINE_LEGEND_HEIGHT + row_height * len(sample_ids)),
-    )
-    return [
-        PlotlyFigure(
-            label='Measurement timeline', open=True, figure=figure.to_plotly_json()
-        )
-    ]
-
-
-def _files_app_url(upload_id: str) -> str:
-    """The address of the app "Stability files" in NOMAD's new GUI, filtered to the
-    files of the upload `upload_id`."""
-    from nomad_pv_stability_measurements.apps.stability_files import (
-        stability_files_app,
-    )
-
-    query = urlencode({'upload_id': upload_id})
-    path = stability_files_app.path
-    # The new GUI is served by its own plugin, below the classic GUI's path unless
-    # that plugin says otherwise.
-    try:
-        gui_v2 = config.get_plugin_entry_point('nomad_gui.apis:gui_api')
-        base_v2 = config.services.base_url(True) + gui_v2.get_public_base_path()
-    except Exception:
-        base_v2 = config.gui_url('v2')
-    return f'{base_v2}/apps/{path}?{query}'
-
-
-def _timeline_time_zone(entries) -> tzinfo:
-    """The time zone of the measurement timeline for the files of `entries`: the
-    `LOCAL_TIME_ZONE` of their institutions if all of them have the same, else UTC,
-    as for institutions in different zones or without one."""
-    modules = {module.INSTITUTION: module for module in INSTITUTIONS}
-    zones = {
-        getattr(modules.get(entry.institution), 'LOCAL_TIME_ZONE', None)
-        for entry in entries
-    }
-    if len(zones) == 1 and None not in zones:
-        return zones.pop()
-    return timezone.utc
-
-
-def _rgba(red: int, green: int, blue: int, opacity: float = 1) -> str:
-    """A Plotly colour with the given `opacity`."""
-    return f'rgba({red}, {green}, {blue}, {opacity})'
 
 
 m_package.__init_metainfo__()

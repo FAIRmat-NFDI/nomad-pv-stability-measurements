@@ -1,21 +1,4 @@
 from nomad.config.models.plugins import ParserEntryPoint
-from pydantic import Field
-
-
-class NewParserEntryPoint(ParserEntryPoint):
-    parameter: int = Field(0, description='Custom configuration parameter')
-
-    def load(self):
-        from nomad_pv_stability_measurements.parsers.parser import NewParser
-
-        return NewParser(**self.model_dump())
-
-
-parser_entry_point = NewParserEntryPoint(
-    name='NewParser',
-    description='New parser entry point configuration.',
-    mainfile_name_re=r'.*\.newmainfilename',
-)
 
 
 class StabilityFileParserEntryPoint(ParserEntryPoint):
@@ -30,8 +13,8 @@ class StabilityFileParserEntryPoint(ParserEntryPoint):
 stability_file_parser_entry_point = StabilityFileParserEntryPoint(
     name='StabilityFileParser',
     description="""
-    Registers every file of a stability upload with its measurement kind, file
-    format, start time and sample.
+    Registers every file of a stability upload with its stability file type, file
+    format, provenance, times and sample.
     """,
     # Any file except NOMAD archive files, which must stay with NOMAD's own parser,
     # files whose name starts with a dot, and the project data spreadsheet and its

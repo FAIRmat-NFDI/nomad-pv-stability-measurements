@@ -1,10 +1,3 @@
-def test_importing_app():
-    # this will raise an exception if pydantic model validation fails for the app
-    from nomad_pv_stability_measurements.apps import app_entry_point
-
-    assert app_entry_point.app.label == 'NewApp'
-
-
 def strings(value) -> list[str]:
     """All strings within `value`, a structure of dicts, lists and values."""
     if isinstance(value, str):
@@ -14,6 +7,16 @@ def strings(value) -> list[str]:
     if isinstance(value, list | tuple):
         return [string for item in value for string in strings(item)]
     return []
+
+
+def is_quantity(section_def, path: str) -> bool:
+    """Whether `path`, e.g. `sample_identity.sample_id`, is a quantity of the section
+    `section_def` or of its sub-sections."""
+    name, _, rest = path.partition('.')
+    if not rest:
+        return name in section_def.all_quantities
+    sub_section = section_def.all_sub_sections.get(name)
+    return sub_section is not None and is_quantity(sub_section.sub_section, rest)
 
 
 def test_stability_files_app_uses_quantities_of_the_file_entries():
@@ -30,8 +33,13 @@ def test_stability_files_app_uses_quantities_of_the_file_entries():
         for value in strings(app.model_dump())
         if value.endswith(f'#{STABILITY_FILE}') and '*' not in value
     }
-    assert {'sample_id', 'measurement_kind', 'start_time', 'duration'} <= used
-    assert used <= set(StabilityFile.m_def.all_quantities)
+    assert {
+        'sample_identity.sample_id',
+        'stability_file_type',
+        'start_time',
+        'duration',
+    } <= used
+    assert all(is_quantity(StabilityFile.m_def, path) for path in used)
     assert app.filters_locked == {
         'section_defs.definition_qualified_name': [STABILITY_FILE]
     }

@@ -13,7 +13,7 @@ INSTITUTION = 'TEMPLATE'
 #: Email domains, such as 'uni.edu'; subdomains count too.
 EMAIL_DOMAINS: tuple[str, ...] = ()
 
-#: Time zone of the measurement computers, for times written without one.
+#: Time zone of the computers that write the files, for times written without one.
 LOCAL_TIME_ZONE = ZoneInfo('Europe/Berlin')
 
 #: Bytes from the start of a file passed as `content`.
@@ -22,8 +22,9 @@ HEAD_SIZE = 4096
 #: Bytes from the end of a file passed as `tail`; 0 for none.
 TAIL_SIZE = 4096
 
-# One function per measurement kind you upload, named `match_<kind>`, with <kind>
-# from `MEASUREMENT_KINDS` in `schema_packages/schema_package.py` (e.g. `match_jv`).
+# One function per stability file type you upload, named `match_<type>`, with
+# <type> from `STABILITY_FILE_TYPES` in `schema_packages/schema_package.py`
+# (e.g. `match_jv`).
 # Functions are tried in that order; the first that does not return `False` wins.
 #
 # def match_jv(path: str, content: str, tail: str) -> tuple | bool:

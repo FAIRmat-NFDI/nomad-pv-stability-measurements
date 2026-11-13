@@ -1,15 +1,14 @@
-"""The project data of a stability upload: the spreadsheet `project_data.xlsx` with
-the proposal, the samples and values for the files, and the ELN entry `ProjectData`
-that holds the proposal and the samples in NOMAD.
+"""The project data spreadsheet `project_data.xlsx` of a stability upload, with the
+proposal, the samples and values for the files.
 
 The spreadsheet has three sheets:
 
 - `project` (the first sheet): one row with the proposal as submitted in GATE
-  (READY-PV) and the standards used;
+  (READY-PV);
 - `files`: one row per path pattern with values for the files it matches;
-- `samples`: one row per sample, its layer stack at the end in blocks of three
-  columns `LayerN: layer_type`, `LayerN: layer_material_name` and
-  `LayerN: layer_thickness [nm]`.
+- `samples`: one row per sample with the standards applied to it, and its layer
+  stack at the end in blocks of three columns `LayerN: layer_type`,
+  `LayerN: layer_material_name` and `LayerN: layer_thickness [nm]`.
 
 NOMAD's tabular parser fills `ProjectData` from the sheet `project`. The sheet
 `samples` is read here when `ProjectData` imports the spreadsheet, and each row
@@ -26,6 +25,24 @@ from fnmatch import fnmatchcase
 from functools import lru_cache
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, NamedTuple
+
+from nomad.datamodel.metainfo.basesections import CompositeSystemReference
+from nomad.parsing.tabular import read_table_data
+from nomad.units import ureg
+
+from nomad_pv_stability_measurements.schema_packages.sample_schema import (
+    Encapsulation,
+    LayerProperties,
+    ModuleConfiguration,
+    SolarCellSample,
+    Substrate,
+)
+from nomad_pv_stability_measurements.schema_packages.schema_package import (
+    ProjectData,
+    SampleIdentity,
+    StabilityFile,
+)
+from nomad_pv_stability_measurements.schema_packages.utils import split_commas
 
 if TYPE_CHECKING:
     from structlog.stdlib import BoundLogger
@@ -48,8 +65,17 @@ MAX_PATTERN_LENGTH = 500
 #: How many layer blocks the template has; more can be pasted.
 TEMPLATE_LAYER_BLOCKS = 8
 
+#: The sections that the sheet `samples` fills, by the names used in
+#: `SAMPLE_COLUMNS`.
+SAMPLE_SECTIONS = {
+    'sample': SolarCellSample,
+    'substrate': Substrate,
+    'module': ModuleConfiguration,
+    'encapsulation': Encapsulation,
+}
+
 #: The columns of the sheet `samples` before the layer blocks: the section they
-#: fill (`sample`, `substrate`, `module` or `encapsulation`) and its quantity.
+#: fill (a key of `SAMPLE_SECTIONS`) and its quantity.
 SAMPLE_COLUMNS = {
     'sample_id': ('sample', 'sample_id'),
     'name': ('sample', 'name'),
@@ -67,17 +93,41 @@ SAMPLE_COLUMNS = {
     'sides_encapsulated': ('encapsulation', 'sides_encapsulated'),
 }
 
+#: The column of the sheet `samples` with the standards applied to the sample,
+#: separated by commas, e.g. `ISOS-L-2 (65 °C, MPP), ISOS-D-1`. It gives the
+#: sample's file series in `ProjectData` its applied standards, not the sample entry.
+STANDARD_COLUMN = 'standard'
+
+#: What the column `standard` holds, for the template.
+STANDARD_COLUMN_DESCRIPTION = """
+The stability standards applied to the sample, separated by commas, e.g. ISOS-L-2,
+or with the choices made among its options in parentheses, e.g. ISOS-L-2 (65 °C,
+MPP), ISOS-D-1. Each references the standard of its name in the catalogue of
+standards.
+"""
+
 #: The columns of the sheet `files`: the path pattern, then quantities of
 #: `StabilityFile` that a row can give for the files it matches.
 FILE_COLUMNS = (
     'files',
-    'measurement_kind',
+    'stability_file_type',
     'start_time',
     'end_time',
+    'duration',
     'provenance',
     'sample_id',
     'sample_reference',
 )
+
+#: Earlier headers of columns of the sheet `files`, read under their current name.
+FILE_COLUMN_ALIASES = {'measurement_kind': 'stability_file_type'}
+
+#: Columns of the sheet `files` that fill the file entry's `sample_identity`, by
+#: the quantity of `SampleIdentity` they fill.
+SAMPLE_IDENTITY_COLUMNS = {
+    'sample_id': 'sample_id',
+    'sample_reference': 'external_reference',
+}
 
 #: What the column `files` holds, for the template.
 FILES_COLUMN_DESCRIPTION = """
@@ -103,6 +153,26 @@ TRUE_TEXTS = ('yes', 'true', '1', 'y', 'x')
 FALSE_TEXTS = ('no', 'false', '0', 'n', '')
 
 
+# Cells and paths.
+
+
+def is_empty(value) -> bool:
+    """Whether a cell holds nothing: `None`, NaN or blank text."""
+    if value is None:
+        return True
+    if isinstance(value, float) and math.isnan(value):
+        return True
+    return isinstance(value, str) and not value.strip()
+
+
+def clean_sample_id(sample_id) -> str | None:
+    """`sample_id` without spaces at its start and end, `None` if nothing is left. A
+    whole number read as a float, as spreadsheets give it, is written without `.0`."""
+    if isinstance(sample_id, float) and sample_id.is_integer():
+        sample_id = int(sample_id)
+    return None if is_empty(sample_id) else str(sample_id).strip()
+
+
 def pattern_error(pattern: str | None) -> str | None:
     """Why the path pattern `pattern` is not accepted, or `None` if it is.
 
@@ -122,16 +192,50 @@ def pattern_error(pattern: str | None) -> str | None:
     return None
 
 
-def clean_sample_id(sample_id) -> str | None:
-    """`sample_id` without spaces at its start and end, `None` if nothing is left."""
-    if sample_id is None:
-        return None
-    if isinstance(sample_id, float):
-        if math.isnan(sample_id):
-            return None
-        if sample_id.is_integer():
-            sample_id = int(sample_id)
-    return str(sample_id).strip() or None
+def sample_entry_path(sample_id: str, part: str = '') -> str:
+    """The path in the upload of the entry of the sample `sample_id`, or of one of
+    its parts (`substrate`, `encapsulation`). Characters that are not safe in a
+    file name become `_`."""
+    name = re.sub(r'[^A-Za-z0-9._-]', '_', sample_id)
+    suffix = f'_{part}' if part else ''
+    return f'{SAMPLES_FOLDER}/{name}{suffix}.archive.json'
+
+
+def sample_entry_reference(sample_id: str, part: str = '') -> str:
+    """A reference to the data of the entry of the sample `sample_id`, or of one of
+    its parts, in the same upload."""
+    return f'../upload/archive/mainfile/{sample_entry_path(sample_id, part)}#data'
+
+
+# Reading the sheets.
+
+
+def _sheets(path: str, file) -> dict:
+    """The sheets of the spreadsheet `file`, named `path`, as NOMAD's tabular parser
+    reads them: per sheet, per column header, per row index, the cell value."""
+    return dict(read_table_data(path, file).iloc[:, 0].items())
+
+
+def read_sheets(context, path: str) -> dict:
+    """The sheets of the spreadsheet `path` of the upload, as `_sheets` reads them."""
+    with context.raw_file(path, 'rb') as file:
+        return _sheets(path, file)
+
+
+def read_sheet_rows(data: dict, sheet: str) -> list[dict]:
+    """The rows of the sheet `sheet`, as dictionaries from header to cell, from
+    `data`, the sheets as `read_sheets` reads them."""
+    columns = data.get(sheet)
+    if not columns:
+        return []
+    indices = sorted({index for column in columns.values() for index in column})
+    return [
+        {header: column.get(index) for header, column in columns.items()}
+        for index in indices
+    ]
+
+
+# The sheet `files`.
 
 
 class FileRow(NamedTuple):
@@ -141,15 +245,20 @@ class FileRow(NamedTuple):
     values: dict
 
 
+def file_column_quantity(name: str):
+    """The quantity that the column `name` of the sheet `files` fills: one of
+    `StabilityFile`, or of its `SampleIdentity`."""
+    if name in SAMPLE_IDENTITY_COLUMNS:
+        return SampleIdentity.m_def.all_quantities[SAMPLE_IDENTITY_COLUMNS[name]]
+    return StabilityFile.m_def.all_quantities[name]
+
+
 def file_rows(data: dict, logger: 'BoundLogger | None' = None) -> list[FileRow]:
     """The readable rows of the sheet `files` in `data`, the sheets as
     `read_sheets` reads them. Unknown columns, invalid patterns and values that a
     `StabilityFile` does not accept are logged as errors naming row and column, if
     a `logger` is given, and left out: an unknown column or a cell, or a row with an
     invalid pattern."""
-    from nomad_pv_stability_measurements.schema_packages.schema_package import (
-        StabilityFile,
-    )
 
     def problem(row, column, message):
         if logger is not None:
@@ -158,41 +267,43 @@ def file_rows(data: dict, logger: 'BoundLogger | None' = None) -> list[FileRow]:
             )
 
     rows = read_sheet_rows(data, 'files')
-    headers = list(rows[0]) if rows else []
     columns = []
-    for header in headers:
+    for header in rows[0] if rows else []:
         name = str(header).strip()
+        name = FILE_COLUMN_ALIASES.get(name, name)
         if name in FILE_COLUMNS:
             columns.append((header, name))
         elif not name.startswith('Unnamed:'):
             problem(1, header, 'unknown column')
 
     readable = []
-    quantities = StabilityFile.m_def.all_quantities
     for number, row in enumerate(rows, start=2):
         cells = {name: row.get(header) for header, name in columns}
-        if all(_is_empty(cell) for cell in cells.values()):
+        if all(is_empty(cell) for cell in cells.values()):
             continue
-        pattern = None if _is_empty(cells.get('files')) else str(cells['files'])
+        pattern = None if is_empty(cells.get('files')) else str(cells['files'])
         error = pattern_error(pattern)
         if error is not None:
             problem(number, 'files', error)
             continue
         values = {}
         for name, cell in cells.items():
-            if name == 'files' or _is_empty(cell):
+            if name == 'files' or is_empty(cell):
                 continue
             if name == 'sample_id':
                 values[name] = clean_sample_id(cell)
                 continue
             # The file entry's own quantity checks and converts the value.
-            check = StabilityFile()
+            quantity = file_column_quantity(name)
+            check = quantity.m_parent.section_cls()
+            # A number stays a number, as for a `duration`; all else is read as text.
+            is_number = isinstance(cell, int | float) and not isinstance(cell, bool)
             try:
-                check.m_set(quantities[name], str(cell).strip())
+                check.m_set(quantity, cell if is_number else str(cell).strip())
             except Exception as exception:
                 problem(number, name, str(exception))
                 continue
-            values[name] = check.m_get(quantities[name])
+            values[name] = check.m_get(quantity)
         readable.append(FileRow(pattern, values))
     return readable
 
@@ -233,10 +344,8 @@ def load_spreadsheet(context) -> Spreadsheet | None:
 
 @lru_cache(maxsize=4)
 def _read_spreadsheet(os_path: str, _size: int, _mtime: int) -> Spreadsheet:
-    from nomad.parsing.tabular import read_table_data
-
     with open(os_path, 'rb') as file:
-        data = dict(read_table_data(PROJECT_DATA_FILE, file).iloc[:, 0].items())
+        data = _sheets(PROJECT_DATA_FILE, file)
     sample_ids = {
         clean_sample_id(row.get('sample_id'))
         for row in read_sheet_rows(data, 'samples')
@@ -244,33 +353,32 @@ def _read_spreadsheet(os_path: str, _size: int, _mtime: int) -> Spreadsheet:
     return Spreadsheet(file_rows(data), frozenset(sample_ids - {None}))
 
 
-def sample_entry_path(sample_id: str, part: str = '') -> str:
-    """The path in the upload of the entry of the sample `sample_id`, or of one of
-    its parts (`substrate`, `encapsulation`). Characters that are not safe in a
-    file name become `_`."""
-    name = re.sub(r'[^A-Za-z0-9._-]', '_', sample_id)
-    suffix = f'_{part}' if part else ''
-    return f'{SAMPLES_FOLDER}/{name}{suffix}.archive.json'
+# The sheet `samples`.
 
 
-def entry_reference(path: str) -> str:
-    """A reference to the data of the entry of the file `path` of the same upload."""
-    return f'../upload/archive/mainfile/{path}#data'
+def _kind(quantity) -> str:
+    """`bool`, `int`, `float` or `str`: how a cell is read into `quantity`."""
+    standard = quantity.type.standard_type()
+    for kind in ('bool', 'int', 'float'):
+        if standard.startswith(kind):
+            return kind
+    return 'str'
 
 
-def _is_empty(value) -> bool:
-    if value is None:
-        return True
-    if isinstance(value, float) and math.isnan(value):
-        return True
-    return isinstance(value, str) and not value.strip()
+def _bool_value(value) -> bool:
+    """`value` from a cell of a TRUE/FALSE column."""
+    # A column with empty cells is read as numbers: TRUE as 1.0.
+    if isinstance(value, bool | int | float) and value in (0, 1):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text not in TRUE_TEXTS + FALSE_TEXTS:
+        raise ValueError(f'{value!r} is not TRUE or FALSE')
+    return text in TRUE_TEXTS
 
 
 def _quantity_value(quantity, value, unit: str | None):
     """`value` from a cell as a value of `quantity`, converted from `unit`, the unit
     in the column's header, to the quantity's unit."""
-    from nomad.units import ureg
-
     kind = _kind(quantity)
     if kind == 'bool':
         return _bool_value(value)
@@ -287,57 +395,6 @@ def _quantity_value(quantity, value, unit: str | None):
             raise ValueError(f'{given_unit!r}: this column has no unit')
         return float(value)
     return ureg.Quantity(float(value), given_unit or quantity.unit).to(quantity.unit)
-
-
-def _bool_value(value) -> bool:
-    """`value` from a cell of a TRUE/FALSE column."""
-    # A column with empty cells is read as numbers: TRUE as 1.0.
-    if isinstance(value, bool | int | float) and value in (0, 1):
-        return bool(value)
-    text = str(value).strip().lower()
-    if text not in TRUE_TEXTS + FALSE_TEXTS:
-        raise ValueError(f'{value!r} is not TRUE or FALSE')
-    return text in TRUE_TEXTS
-
-
-def _kind(quantity) -> str:
-    """`bool`, `int`, `float` or `str`: how a cell is read into `quantity`."""
-    standard = quantity.type.standard_type()
-    for kind in ('bool', 'int', 'float'):
-        if standard.startswith(kind):
-            return kind
-    return 'str'
-
-
-def _unit_label(quantity) -> str:
-    """The unit of `quantity` as written in a header, e.g. ` [cm^2]`; empty without
-    a unit."""
-    if quantity.unit is None:
-        return ''
-    return f' [{format(quantity.unit, "~")}]'.replace(' ** ', '^').replace('**', '^')
-
-
-def read_sheet_rows(data: dict, sheet: str) -> list[dict]:
-    """The rows of the sheet `sheet`, as dictionaries from header to cell, from
-    `data`, the sheets as `read_sheets` reads them."""
-    columns = data.get(sheet)
-    if not columns:
-        return []
-    headers = list(columns)
-    indices = sorted({index for column in columns.values() for index in column})
-    return [
-        {header: columns[header].get(index) for header in headers} for index in indices
-    ]
-
-
-def read_sheets(context, path: str) -> dict:
-    """The sheets of the spreadsheet `path` of the upload, as NOMAD's tabular parser
-    reads them: per sheet, per column header, per row index, the cell value."""
-    from nomad.parsing.tabular import read_table_data
-
-    with context.raw_file(path, 'rb') as file:
-        table = read_table_data(path, file)
-    return dict(table.iloc[:, 0].items())
 
 
 def sample_columns(headers, logger: 'BoundLogger') -> tuple[dict, dict]:
@@ -359,10 +416,8 @@ def sample_columns(headers, logger: 'BoundLogger') -> tuple[dict, dict]:
         match = HEADER_RE.match(str(header))
         name = match['name'] if match else None
         if match is not None and match['layer'] is not None:
-            block, number = (
-                blocks.setdefault(int(match['layer']), {}),
-                int(match['layer']),
-            )
+            number = int(match['layer'])
+            block = blocks.setdefault(number, {})
             if name not in LAYER_FIELDS:
                 problem(header, f'a layer column is one of {", ".join(LAYER_FIELDS)}')
                 broken.add(number)
@@ -373,7 +428,7 @@ def sample_columns(headers, logger: 'BoundLogger') -> tuple[dict, dict]:
                 block[name] = (header, match['unit'])
         elif name in SAMPLE_COLUMNS:
             columns[header] = (name, match['unit'])
-        else:
+        elif name != STANDARD_COLUMN:
             problem(header, 'unknown column')
     for number, block in list(blocks.items()):
         missing = [field for field in LAYER_FIELDS if field not in block]
@@ -391,17 +446,7 @@ def sample_sections(
     describes, read from the `columns` and layer `blocks` of `sample_columns`:
     sample, substrate, and encapsulation if its columns are filled; `None` if a cell
     cannot be read, logged as an error naming row and column."""
-    from nomad_pv_stability_measurements.schema_packages.sample_schema import (
-        Encapsulation,
-        LayerProperties,
-        ModuleConfiguration,
-        ReadableIdentifiersCustom,
-        SolcarCellSample,
-        Substrate,
-    )
-
-    definitions = _sample_definitions()
-    values: dict[str, dict] = {key: {} for key in definitions}
+    values: dict[str, dict] = {key: {} for key in SAMPLE_SECTIONS}
     ok = True
 
     def read(quantity, header, unit):
@@ -416,13 +461,13 @@ def sample_sections(
             return None
 
     for header, (name, unit) in columns.items():
-        if _is_empty(row.get(header)):
+        if is_empty(row.get(header)):
             continue
         section, quantity_name = SAMPLE_COLUMNS[name]
         if name == 'sample_id':
             values['sample']['sample_id'] = clean_sample_id(row[header])
             continue
-        quantity = definitions[section].m_def.all_quantities[quantity_name]
+        quantity = SAMPLE_SECTIONS[section].m_def.all_quantities[quantity_name]
         values[section][quantity_name] = read(quantity, header, unit)
 
     sample_id = values['sample'].pop('sample_id', None)
@@ -435,46 +480,46 @@ def sample_sections(
         )
         return None
 
-    layer_sections = []
     layer_quantities = LayerProperties.m_def.all_quantities
+    layers = []
     for block in blocks.values():
-        cells = {field: block[field] for field in LAYER_FIELDS}
-        if all(_is_empty(row.get(header)) for header, _ in cells.values()):
-            continue
-        layer_values = {
-            field: read(layer_quantities[field], header, unit)
-            for field, (header, unit) in cells.items()
-            if not _is_empty(row.get(header))
+        cells = {
+            field: (header, unit)
+            for field, (header, unit) in block.items()
+            if not is_empty(row.get(header))
         }
-        layer_sections.append(LayerProperties(**layer_values))
+        if cells:
+            layers.append(
+                LayerProperties(
+                    **{
+                        field: read(layer_quantities[field], header, unit)
+                        for field, (header, unit) in cells.items()
+                    }
+                )
+            )
     if not ok:
         return None
 
     substrate = Substrate(
         name=f'{sample_id} substrate',
-        substrate_properties=layer_sections,
+        substrate_properties=layers,
         **values['substrate'],
     )
-    sample_values = values['sample']
-    sample = SolcarCellSample(
-        name=sample_values.pop('name', sample_id),
-        lab_id=sample_id,
-        sample_id=ReadableIdentifiersCustom(sample_id=sample_id),
-        substrate=entry_reference(sample_entry_path(sample_id, 'substrate')),
-        **sample_values,
+    sample = SolarCellSample(
+        name=values['sample'].pop('name', sample_id),
+        sample_id=sample_id,
+        substrate=sample_entry_reference(sample_id, 'substrate'),
+        **values['sample'],
     )
     if values['module']:
         sample.module_configuration = ModuleConfiguration(**values['module'])
     encapsulation = None
     if values['encapsulation']:
-        from nomad.datamodel.metainfo.basesections import CompositeSystemReference
-
         encapsulation = Encapsulation(
             name=f'{sample_id} encapsulation',
             samples=[
                 CompositeSystemReference(
-                    lab_id=sample_id,
-                    reference=entry_reference(sample_entry_path(sample_id)),
+                    lab_id=sample_id, reference=sample_entry_reference(sample_id)
                 )
             ],
             **values['encapsulation'],
@@ -482,11 +527,26 @@ def sample_sections(
     return sample_id, sample, substrate, encapsulation
 
 
+def sample_standards(data: dict) -> dict[str, list[str]]:
+    """The standards written in the column `standard` of the sheet `samples` in
+    `data`, by sample identifier, for the samples that have any. A comma in
+    parentheses does not separate, as in `ISOS-L-2 (65 °C, MPP)`."""
+    standards = {}
+    for row in read_sheet_rows(data, 'samples'):
+        sample_id = clean_sample_id(row.get('sample_id'))
+        cell = row.get(STANDARD_COLUMN)
+        written = None if is_empty(cell) else split_commas([cell])
+        if sample_id is not None and written:
+            standards[sample_id] = written
+    return standards
+
+
 def write_sample_entries(context, data: dict, logger: 'BoundLogger') -> list:
     """Writes the entries of the samples of the sheet `samples` in `data` into the
     upload's folder `samples` and has NOMAD process them; returns a reference to
-    each sample entry written. Entries of earlier imports are overwritten; rows that cannot
-    be read, and repeated sample identifiers, are logged as errors and left out."""
+    each sample entry written. Entries of earlier imports are overwritten; rows that
+    cannot be read, and repeated sample identifiers, are logged as errors and left
+    out."""
     references = []
     seen_paths: dict[str, str] = {}
     if not context.raw_path_exists(SAMPLES_FOLDER):
@@ -494,7 +554,7 @@ def write_sample_entries(context, data: dict, logger: 'BoundLogger') -> list:
     rows = read_sheet_rows(data, 'samples')
     columns, blocks = sample_columns(rows[0] if rows else [], logger)
     for number, row in enumerate(rows, start=2):
-        if all(_is_empty(cell) for cell in row.values()):
+        if all(is_empty(cell) for cell in row.values()):
             continue
         sections = sample_sections(row, number, columns, blocks, logger)
         if sections is None:
@@ -512,22 +572,21 @@ def write_sample_entries(context, data: dict, logger: 'BoundLogger') -> list:
             continue
         seen_paths[path] = sample_id
 
-        entries = [
-            (sample_entry_path(sample_id, 'substrate'), substrate),
-            (path, sample),
-        ]
-        if encapsulation is not None:
-            entries.append(
-                (sample_entry_path(sample_id, 'encapsulation'), encapsulation)
-            )
-        for entry_path, section in entries:
+        parts = {'substrate': substrate, '': sample, 'encapsulation': encapsulation}
+        for part, section in parts.items():
+            if section is None:
+                continue
+            entry_path = sample_entry_path(sample_id, part)
             with context.raw_file(entry_path, 'w') as file:
                 json.dump(
                     {'data': section.m_to_dict(with_root_def=True)}, file, indent=2
                 )
             context.process_updated_raw_file(entry_path, allow_modify=True)
-        references.append(entry_reference(path))
+        references.append(sample_entry_reference(sample_id))
     return references
+
+
+# The template.
 
 
 class TemplateColumn(NamedTuple):
@@ -542,80 +601,57 @@ class TemplateColumn(NamedTuple):
     text: bool = False
 
 
-def _sample_definitions() -> dict:
-    """The sections that the sheet `samples` fills, by the names in
-    `SAMPLE_COLUMNS`."""
-    from nomad_pv_stability_measurements.schema_packages.sample_schema import (
-        Encapsulation,
-        ModuleConfiguration,
-        SolcarCellSample,
-        Substrate,
-    )
-
-    return {
-        'sample': SolcarCellSample,
-        'substrate': Substrate,
-        'module': ModuleConfiguration,
-        'encapsulation': Encapsulation,
-    }
-
-
-def _suggestions(quantity) -> list | None:
-    """The suggestions of the ELN annotation of `quantity`, if it has any."""
-    eln = quantity.m_get_annotations('eln')
-    props = eln.get('props') if isinstance(eln, dict) else getattr(eln, 'props', None)
-    return (props or {}).get('suggestions')
+def _unit_label(quantity) -> str:
+    """The unit of `quantity` as written in a header, e.g. ` [cm^2]`; empty without
+    a unit."""
+    if quantity.unit is None:
+        return ''
+    return f' [{format(quantity.unit, "~")}]'.replace(' ** ', '^').replace('**', '^')
 
 
 def _value_column(header: str, quantity, text: bool = False) -> TemplateColumn:
     """The column `header` of `quantity`: a TRUE/FALSE dropdown for a yes/no
-    quantity, the allowed values of an enumeration, or the suggestions."""
+    quantity, the allowed values of an enumeration, or the suggestions of its ELN
+    annotation."""
     if _kind(quantity) == 'bool':
         return TemplateColumn(header, quantity.description, ['TRUE', 'FALSE'], True)
     if quantity.type.standard_type() == 'enum':
         return TemplateColumn(
             header, quantity.description, list(quantity.type), True, text
         )
-    return TemplateColumn(
-        header, quantity.description, _suggestions(quantity), False, text
-    )
+    eln = quantity.m_get_annotations('eln')
+    props = eln.get('props') if isinstance(eln, dict) else getattr(eln, 'props', None)
+    suggestions = (props or {}).get('suggestions')
+    return TemplateColumn(header, quantity.description, suggestions, False, text)
 
 
 def template_columns(layer_blocks: int = TEMPLATE_LAYER_BLOCKS) -> dict:
     """The columns of the sheets `project`, `files` and `samples` of the template,
     from the schema: the quantities with a tabular annotation, and the sample
     columns with their units followed by `layer_blocks` layer blocks."""
-    from nomad_pv_stability_measurements.schema_packages.sample_schema import (
-        LayerProperties,
-    )
-    from nomad_pv_stability_measurements.schema_packages.schema_package import (
-        ProjectData,
-        StabilityFile,
-    )
-
     project = []
     for quantity in ProjectData.m_def.all_quantities.values():
         tabular = quantity.m_get_annotations('tabular')
         if tabular is not None and '/' not in tabular.name:
             project.append(_value_column(tabular.name, quantity, text=True))
 
-    quantities = StabilityFile.m_def.all_quantities
     files = [TemplateColumn('files', FILES_COLUMN_DESCRIPTION, text=True)] + [
-        _value_column(name, quantities[name], text=True) for name in FILE_COLUMNS[1:]
+        _value_column(name, file_column_quantity(name), text=True)
+        for name in FILE_COLUMNS[1:]
     ]
 
-    definitions = _sample_definitions()
     samples = [
         TemplateColumn(
             'sample_id',
             'The identifier of the sample, as the stations write it in their files. '
             'Unique in this sheet.',
             text=True,
-        )
+        ),
+        TemplateColumn(STANDARD_COLUMN, STANDARD_COLUMN_DESCRIPTION, text=True),
     ]
     for name, (section, quantity_name) in SAMPLE_COLUMNS.items():
         if name != 'sample_id':
-            quantity = definitions[section].m_def.all_quantities[quantity_name]
+            quantity = SAMPLE_SECTIONS[section].m_def.all_quantities[quantity_name]
             samples.append(_value_column(f'{name}{_unit_label(quantity)}', quantity))
     layer_quantities = LayerProperties.m_def.all_quantities
     for block in range(1, layer_blocks + 1):
@@ -639,12 +675,15 @@ def write_project_data_template(path: str, layer_blocks: int = TEMPLATE_LAYER_BL
 
     workbook = Workbook()
     workbook.remove(workbook.active)
-    sheets = {name: workbook.create_sheet(name) for name in template_columns(0)}
+    sheets = template_columns(layer_blocks)
+    for name in sheets:
+        workbook.create_sheet(name)
     lists = workbook.create_sheet('lists')
     lists.sheet_state = 'hidden'
+    list_count = 0
 
-    for name, columns in template_columns(layer_blocks).items():
-        sheet = sheets[name]
+    for name, columns in sheets.items():
+        sheet = workbook[name]
         for index, column in enumerate(columns, start=1):
             letter = get_column_letter(index)
             cell = sheet.cell(row=1, column=index, value=column.header)
@@ -659,9 +698,8 @@ def write_project_data_template(path: str, layer_blocks: int = TEMPLATE_LAYER_BL
                 # Text, so that dates and identifiers are kept as written.
                 sheet.column_dimensions[letter].number_format = '@'
             if column.values:
-                list_letter = get_column_letter(lists.max_column + 1)
-                if lists.max_column == 1 and lists['A1'].value is None:
-                    list_letter = 'A'
+                list_count += 1
+                list_letter = get_column_letter(list_count)
                 lists[f'{list_letter}1'] = f'{name}: {column.header}'
                 for row, value in enumerate(column.values, start=2):
                     lists[f'{list_letter}{row}'] = value

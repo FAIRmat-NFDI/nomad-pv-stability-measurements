@@ -4,7 +4,7 @@ from test_stability_upload_summary import normalize
 
 from nomad_pv_stability_measurements.schema_packages.schema_package import (
     ProjectData,
-    StabilitySampleGroup,
+    StabilityFileGroup,
 )
 
 
@@ -20,7 +20,7 @@ def unitov_jv(device: str, date: str, time: str) -> str:
 
 
 def test_summary_groups_the_files_by_sample_in_measurement_order(staging_upload):
-    summary = ProjectData(file_groups=[StabilitySampleGroup(sample_id='entered')])
+    summary = ProjectData(general_groups=[StabilityFileGroup(name='entered')])
     normalize(
         staging_upload,
         {
@@ -35,8 +35,8 @@ def test_summary_groups_the_files_by_sample_in_measurement_order(staging_upload)
     )
 
     assert [
-        (sample.sample_id, [record.file for record in sample.files])
-        for sample in summary.file_groups
+        (sample.name, [record.file for record in sample.files])
+        for sample in [*summary.sample_series, *summary.general_groups]
     ] == [
         (
             'A1',
@@ -51,8 +51,8 @@ def test_summary_groups_the_files_by_sample_in_measurement_order(staging_upload)
         ('Unknown', ['UNITOV/run_1/plot.pdf']),
     ]
     # Following a reference gives the entry of that file.
-    first_of_a1 = summary.file_groups[0].files[0].entry
-    assert (first_of_a1.file, first_of_a1.sample_id) == (
+    first_of_a1 = summary.sample_series[0].files[0].entry
+    assert (first_of_a1.file, first_of_a1.sample_identity.sample_id) == (
         'UNITOV/run_2/001_JV.txt',
         'A1',
     )
@@ -80,11 +80,12 @@ def test_summary_keeps_each_files_own_sample_reference(staging_upload, monkeypat
     )
 
     # One group for the sample, whose files keep their different references.
-    (group,) = summary.file_groups
-    assert group.sample_id == 'A1'
+    (group,) = summary.sample_series
+    assert group.sample_identity.sample_id == 'A1'
     for record in group.files:
         entry = record.entry
-        assert (entry.sample_id, entry.sample_reference) == (
+        identity = entry.sample_identity
+        assert (identity.sample_id, identity.external_reference) == (
             'A1',
             file_references[record.file],
         )
@@ -219,7 +220,7 @@ def test_summary_plots_each_file_from_start_to_end_in_its_sample_row(
         if trace['name'] == 'mpp_tracking' and 'customdata' in trace
     )
     hover = tracking['hovertemplate']
-    for index, label in enumerate(['sample_id', 'start_time', 'end_time', 'type']):
+    for index, label in enumerate(['series', 'start_time', 'end_time', 'type']):
         assert f'{label}: %{{customdata[{index + 1}]}}' in hover
     assert hover.endswith('<extra></extra>')
     assert list(tracking['customdata'][0]) == [

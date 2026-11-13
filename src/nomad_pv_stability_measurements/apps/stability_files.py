@@ -25,7 +25,8 @@ WIDTHS = {'xxl': 36, 'xl': 30, 'lg': 24, 'md': 18, 'sm': 12}
 
 
 def quantity(name: str) -> str:
-    """The search quantity of the `StabilityFile` quantity `name`."""
+    """The search quantity of the `StabilityFile` quantity at the path `name`, e.g.
+    `start_time` or `sample_identity.sample_id`."""
     return f'data.{name}#{STABILITY_FILE}'
 
 
@@ -33,10 +34,11 @@ stability_files_app = App(
     label='Stability files',
     path='stabilityfiles',
     category='Experiment',
-    description='Search and plot the files of stability measurement uploads.',
+    description='Search and plot the files of stability uploads.',
     readme="""
-    Every file of a stability upload, with its sample, measurement kind and the time
-    it was measured. Files appear here as soon as their upload is processed. Narrow
+    Every file of a stability upload, measured, simulated or from elsewhere, with its
+    sample, stability file type and the period its data cover. Files appear here as
+    soon as their upload is processed. Narrow
     the files down with the menu on the left, for example to one upload or one
     sample, or by selecting a range in the histograms; open a file's entry from the
     table.
@@ -45,8 +47,16 @@ stability_files_app = App(
     search_quantities=SearchQuantities(include=[f'*#{STABILITY_FILE}']),
     columns=[
         Column(quantity=quantity('file'), label='File', selected=True),
-        Column(quantity=quantity('sample_id'), label='Sample', selected=True),
-        Column(quantity=quantity('measurement_kind'), label='Kind', selected=True),
+        Column(
+            quantity=quantity('sample_identity.sample_id'),
+            label='Sample',
+            selected=True,
+        ),
+        Column(
+            quantity=quantity('stability_file_type'),
+            label='File type',
+            selected=True,
+        ),
         Column(quantity=quantity('start_time'), label='Start', selected=True),
         Column(
             quantity=quantity('duration'),
@@ -60,7 +70,10 @@ stability_files_app = App(
         Column(quantity=quantity('end_time'), label='End'),
         Column(quantity=quantity('file_format'), label='Format'),
         Column(quantity=quantity('provenance'), label='Provenance'),
-        Column(quantity=quantity('sample_reference'), label='Sample reference'),
+        Column(
+            quantity=quantity('sample_identity.external_reference'),
+            label='Sample reference',
+        ),
         Column(quantity='upload_id'),
         Column(quantity='upload_create_time', label='Upload time'),
         Column(quantity='authors'),
@@ -70,7 +83,8 @@ stability_files_app = App(
         items=[
             MenuItemTerms(search_quantity='upload_name', title='Upload'),
             MenuItemTerms(
-                search_quantity=quantity('measurement_kind'), title='Measurement kind'
+                search_quantity=quantity('stability_file_type'),
+                title='Stability file type',
             ),
             MenuItemTerms(search_quantity=quantity('institution'), title='Institution'),
             MenuItemTerms(search_quantity=quantity('provenance'), title='Provenance'),
@@ -81,7 +95,7 @@ stability_files_app = App(
     dashboard=Dashboard(
         widgets=[
             WidgetHistogram(
-                title='Measurements over time',
+                title='Files over time',
                 x=Axis(search_quantity=quantity('start_time'), title='Start'),
                 n_bins=100,
                 autorange=True,
@@ -92,7 +106,7 @@ stability_files_app = App(
                 },
             ),
             WidgetHistogram(
-                title='Duration of the measurements',
+                title='Periods covered by the files',
                 x=Axis(
                     search_quantity=quantity('duration'), title='Duration', unit='hour'
                 ),
@@ -107,7 +121,7 @@ stability_files_app = App(
             ),
             WidgetTerms(
                 title='Files per sample',
-                search_quantity=quantity('sample_id'),
+                search_quantity=quantity('sample_identity.sample_id'),
                 scale='linear',
                 show_input=True,
                 # The right half of the row, next to the durations.

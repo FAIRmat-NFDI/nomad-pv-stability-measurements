@@ -8,8 +8,8 @@ from nomad_pv_stability_measurements.parsers import (
 )
 from nomad_pv_stability_measurements.schema_packages.schema_package import (
     ProjectData,
+    StabilityFileGroup,
     StabilityFileReference,
-    StabilitySampleGroup,
 )
 
 UNITOV_JV = (
@@ -45,7 +45,11 @@ def normalize(upload, files: dict[str, str], summary: ProjectData):
 def records(summary: ProjectData) -> list[StabilityFileReference]:
     """The file records of all sample groups of `summary`, ordered by file path."""
     return sorted(
-        (record for sample in summary.file_groups for record in sample.files),
+        (
+            record
+            for group in [*summary.sample_series, *summary.general_groups]
+            for record in group.files
+        ),
         key=lambda record: record.file,
     )
 
@@ -53,8 +57,8 @@ def records(summary: ProjectData) -> list[StabilityFileReference]:
 def test_summary_references_the_entry_of_every_file(staging_upload):
     summary = ProjectData(
         proposal='https://example.org/proposals/42',
-        file_groups=[
-            StabilitySampleGroup(
+        general_groups=[
+            StabilityFileGroup(
                 files=[StabilityFileReference(file='UNITOV/removed.txt')]
             )
         ],
@@ -82,12 +86,12 @@ def test_summary_references_the_entry_of_every_file(staging_upload):
 
     # Following a reference gives the entry of that file.
     jv, pdf = (record.entry for record in records(summary))
-    assert (jv.file, jv.measurement_kind, jv.sample_id) == (
+    assert (jv.file, jv.stability_file_type, jv.sample_identity.sample_id) == (
         'UNITOV/run_1/001_JV.txt',
         'jv',
         '3C_C1_1',
     )
-    assert (pdf.file, pdf.measurement_kind) == ('UNITOV/run_1/plot.pdf', 'unknown')
+    assert (pdf.file, pdf.stability_file_type) == ('UNITOV/run_1/plot.pdf', 'unknown')
 
 
 def test_summary_names_every_institution_of_the_upload(staging_upload):
@@ -149,7 +153,7 @@ def test_summary_does_not_need_the_entries_of_the_files(staging_upload):
 
     assert summary.institutions == ['HZB', 'UNITOV']
     assert [
-        (group.sample_id, [record.file for record in group.files])
-        for group in summary.file_groups
+        (group.name, [record.file for record in group.files])
+        for group in [*summary.sample_series, *summary.general_groups]
     ] == [('3C_C1_1', ['UNITOV/run_1/001_JV.txt']), ('Unknown', ['HZB/jv_001.csv'])]
     assert len(summary.figures) == 1

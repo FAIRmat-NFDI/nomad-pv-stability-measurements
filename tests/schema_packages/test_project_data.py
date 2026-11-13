@@ -6,7 +6,9 @@ import pytest
 from structlog.testing import capture_logs
 
 import nomad_pv_stability_measurements
-from nomad_pv_stability_measurements.project_data import write_project_data_template
+from nomad_pv_stability_measurements.parsers.project_data_utils import (
+    write_project_data_template,
+)
 
 UNITOV_JV = (
     '## Header ##\t\t\r\n'
@@ -23,7 +25,6 @@ PROJECT = {
     'funding_requested': False,
     'co_proposers': 'A. Rossi, B. Bianchi',
     'experiment_start': '2026-09-13',
-    'standards': 'ISOS-L-1, ISOS-D-1',
 }
 
 
@@ -95,13 +96,13 @@ def test_project_data_is_read_from_the_spreadsheet(staging_upload, tmp_path):
             {'files': 'UNITOV/*', 'provenance': 'measured'},
             {
                 'files': 'HZB/simulation/*.csv',
-                'measurement_kind': 'jv',
+                'stability_file_type': 'jv',
                 'provenance': 'simulated',
                 'start_time': '2026-01-05T10:00:00+01:00',
                 'sample_id': ' S1 ',
             },
-            {'files': '../outside/*', 'measurement_kind': 'jv'},
-            {'files': 'UNITOV/*.txt', 'measurement_kind': 'JV curve'},
+            {'files': '../outside/*', 'stability_file_type': 'jv'},
+            {'files': 'UNITOV/*.txt', 'stability_file_type': 'JV curve'},
         ],
     )
     with capture_logs() as logs:
@@ -112,7 +113,6 @@ def test_project_data_is_read_from_the_spreadsheet(staging_upload, tmp_path):
     assert project.title == 'Outdoor stability of nip perovskite cells'
     assert project.funding_requested is False
     assert project.co_proposers == ['A. Rossi', 'B. Bianchi']
-    assert project.standards == ['ISOS-L-1', 'ISOS-D-1']
     assert project.experiment_start == datetime(2026, 9, 13, tzinfo=timezone.utc)
 
     # The import reports the rows of the sheet `files` that cannot be used: the
@@ -120,7 +120,7 @@ def test_project_data_is_read_from_the_spreadsheet(staging_upload, tmp_path):
     errors = [
         (log['row'], log['column']) for log in logs if log['log_level'] == 'error'
     ]
-    assert errors == [(4, 'files'), (5, 'measurement_kind')]
+    assert errors == [(4, 'files'), (5, 'stability_file_type')]
 
 
 def save(upload, path: str, data) -> None:
@@ -143,6 +143,144 @@ def test_edits_to_the_project_data_stay_until_the_next_import(staging_upload, tm
     project.fill_archive_from_datafile = True
     save(staging_upload, 'project_data.archive.json', project)
     assert project_data(staging_upload).title == PROJECT['title']
+
+
+def applied_standards(project) -> dict:
+    """The applied standards of each sample series that has any, by sample, each as
+    name, variant and the name of the referenced standard."""
+    return {
+        group.sample_identity.sample_id: [
+            (each.name, each.variant, each.standard.name if each.standard else None)
+            for each in group.applied_standards
+        ]
+        for group in project.sample_series
+        if group.applied_standards
+    }
+
+
+def test_each_sample_gets_the_standards_of_its_row(staging_upload, tmp_path):
+    samples = [
+        {'sample_id': 'S1', 'standard': 'ISOS-L-2 (65 °C, MPP), ISOS-L-1'},
+        {'sample_id': 'S2', 'standard': 'ISOS-X-9'},
+        {'sample_id': 'S3'},
+    ]
+    with capture_logs() as logs:
+        process(staging_upload, spreadsheet(tmp_path, PROJECT, samples=samples), {})
+
+    # Several standards in their order, a comma in parentheses not separating; a
+    # sample without files has its group for its standards; a standard that no
+    # catalogue holds keeps its name, with a warning.
+    assert applied_standards(project_data(staging_upload)) == {
+        'S1': [
+            ('ISOS-L-2', '65 °C, MPP', 'ISOS-L-2'),
+            ('ISOS-L-1', None, 'ISOS-L-1'),
+        ],
+        'S2': [('ISOS-X-9', None, None)],
+    }
+    assert [log['standard'] for log in logs if 'standard' in log] == ['ISOS-X-9']
+
+
+def test_files_stored_or_described_as_measurement_kind_keep_their_type(
+    staging_upload, tmp_path
+):
+    """`stability_file_type` was called `measurement_kind`."""
+    from nomad_pv_stability_measurements.schema_packages.schema_package import (
+        StabilityFile,
+    )
+
+    assert StabilityFile.m_from_dict(
+        {'measurement_kind': 'jv'}
+    ).stability_file_type == ('jv')
+
+    path = spreadsheet(
+        tmp_path,
+        PROJECT,
+        files=[{'files': 'env/chamber.csv', 'stability_file_type': 'environment_log'}],
+    )
+    workbook = openpyxl.load_workbook(path)
+    for cell in workbook['files'][1]:
+        if cell.value == 'stability_file_type':
+            cell.value = 'measurement_kind'
+    workbook.save(path)
+    with capture_logs() as logs:
+        process(staging_upload, path, {'env/chamber.csv': 'time,T\n'})
+
+    assert [log for log in logs if log['log_level'] == 'error'] == []
+    # A spreadsheet of before 2026-11, with its names of column and file type.
+    assert [each.name for each in project_data(staging_upload).general_groups] == [
+        'Setup logs'
+    ]
+
+
+def test_files_that_belong_to_no_sample_form_general_groups(staging_upload, tmp_path):
+    files = [
+        {'files': 'UNITOV/*', 'provenance': 'measured'},
+        # A general type ignores the sample, also for a simulation.
+        {'files': 'env/chamber.csv', 'stability_file_type': 'setup_log'},
+        {
+            'files': 'env/sim.csv',
+            'stability_file_type': 'setup_log',
+            'provenance': 'simulated',
+            'sample_id': 'S1',
+        },
+        {'files': 'env/weather.csv', 'stability_file_type': 'weather_information'},
+        {'files': 'notes.txt', 'stability_file_type': 'metadata'},
+        # Reference data without sample, such as a calibration, are general too.
+        {
+            'files': 'calibration.csv',
+            'stability_file_type': 'jv',
+            'provenance': 'reference',
+        },
+        # A file about a sample that names none is of an unknown sample.
+        {'files': 'lost.csv', 'stability_file_type': 'jv'},
+    ]
+    process(
+        staging_upload,
+        spreadsheet(tmp_path, PROJECT, files=files),
+        {
+            'UNITOV/run_1/001_JV.txt': UNITOV_JV.format(device='S1'),
+            'env/chamber.csv': 'time,T\n',
+            'env/sim.csv': 'time,T\n',
+            'env/weather.csv': 'time,G\n',
+            'notes.txt': 'notes',
+            'calibration.csv': 'V,J\n',
+            'lost.csv': 'V,J\n',
+        },
+    )
+    project = project_data(staging_upload)
+
+    assert [
+        (each.sample_identity.sample_id, [record.file for record in each.files])
+        for each in project.sample_series
+    ] == [('S1', ['UNITOV/run_1/001_JV.txt'])]
+    assert [
+        (each.name, [record.file for record in each.files])
+        for each in project.general_groups
+    ] == [
+        ('Setup logs', ['env/chamber.csv', 'env/sim.csv']),
+        ('Weather information', ['env/weather.csv']),
+        ('General', ['calibration.csv', 'notes.txt']),
+        ('Unknown', ['lost.csv']),
+    ]
+
+
+def test_applied_standards_edited_by_hand_stay(staging_upload, tmp_path):
+    samples = [{'sample_id': 'S1', 'standard': 'ISOS-L-1'}]
+    process(staging_upload, spreadsheet(tmp_path, PROJECT, samples=samples), {})
+    project = project_data(staging_upload)
+
+    project.sample_series[0].applied_standards[0].notes = 'J–V scans every 12 h.'
+    save(staging_upload, 'project_data.archive.json', project)
+    project = project_data(staging_upload)
+    assert project.sample_series[0].applied_standards[0].notes == (
+        'J–V scans every 12 h.'
+    )
+
+    # An import keeps an applied standard that is written the same.
+    project.fill_archive_from_datafile = True
+    save(staging_upload, 'project_data.archive.json', project)
+    [applied] = project_data(staging_upload).sample_series[0].applied_standards
+    assert (applied.name, applied.notes) == ('ISOS-L-1', 'J–V scans every 12 h.')
 
 
 def test_an_existing_project_entry_is_kept(staging_upload):
@@ -270,7 +408,7 @@ def test_file_entries_take_the_project_data_first(staging_upload, tmp_path):
             {'files': 'UNITOV/run_2/*', 'provenance': 'derived'},
             {
                 'files': 'HZB/simulation/*.csv',
-                'measurement_kind': 'jv',
+                'stability_file_type': 'jv',
                 'provenance': 'simulated',
                 'start_time': '2026-01-05T10:00:00+01:00',
                 'sample_id': 'S1',
@@ -289,27 +427,31 @@ def test_file_entries_take_the_project_data_first(staging_upload, tmp_path):
     )
     entries = {
         record.file: record.entry.m_resolved()
-        for group in project.file_groups
+        for group in [*project.sample_series, *project.general_groups]
         for record in group.files
     }
 
     measured = entries['UNITOV/run_1/001_JV.txt']
     # Matching gives kind, start and sample; the project data the provenance.
-    assert (measured.measurement_kind, measured.provenance) == ('jv', 'reference')
+    assert (measured.stability_file_type, measured.provenance) == ('jv', 'reference')
     assert measured.start_time == datetime(
         2023, 10, 19, 16, 34, 18, tzinfo=timezone.utc
     )
-    assert measured.sample.m_resolved().lab_id == 'S1'
+    assert measured.sample_identity.entry.m_resolved().lab_id == 'S1'
     # A later row overrides an earlier one; the identifier differs in case.
     other = entries['UNITOV/run_2/001_JV.txt']
-    assert (other.provenance, other.sample_id, other.sample) == ('derived', 'S2', None)
+    identity = other.sample_identity
+    assert (other.provenance, identity.sample_id, identity.entry) == (
+        'derived',
+        'S2',
+        None,
+    )
     # A file that no reading code recognizes is described completely.
     simulated = entries['HZB/simulation/jv.csv']
-    assert (simulated.measurement_kind, simulated.provenance) == ('jv', 'simulated')
+    assert (simulated.stability_file_type, simulated.provenance) == ('jv', 'simulated')
     assert simulated.end_time == simulated.start_time
 
     assert project.proposal == PROJECT['proposal']
-    assert project.standards == ['ISOS-L-1', 'ISOS-D-1']
     # Neither the spreadsheet nor the project entry or samples are files of it.
     assert sorted(entries) == [
         'HZB/simulation/jv.csv',
@@ -361,14 +503,30 @@ def test_the_example_upload_is_processed_without_problems(staging_upload):
     assert [log for log in logs if log['log_level'] in ('warning', 'error')] == []
     entries = {
         record.file: record.entry.m_resolved()
-        for group in project.file_groups
+        for group in [*project.sample_series, *project.general_groups]
         for record in group.files
     }
     assert sorted(entries) == sorted(files)
     simulated = entries['HZB/simulation/jv_simulated.csv']
-    assert (simulated.measurement_kind, simulated.provenance) == ('jv', 'simulated')
+    assert (simulated.stability_file_type, simulated.provenance) == ('jv', 'simulated')
+    # A simulation over model time has no times, only the length it covers.
+    model = entries['simulation/degradation_model.csv']
+    assert (model.start_time, model.duration.to('hour').magnitude) == (None, 1000)
     # Every UNITOV file is linked to the sample entry of its device.
     for path, entry in entries.items():
         if path.startswith('UNITOV/'):
-            assert entry.sample.m_resolved().lab_id == entry.sample_id
-    assert project.standards == ['ISOS-L-1', 'ISOS-D-1']
+            identity = entry.sample_identity
+            assert identity.entry.m_resolved().lab_id == identity.sample_id
+    assert applied_standards(project) == {
+        'RPV-S1': [('ISOS-L-1', 'MPP', 'ISOS-L-1')],
+        'RPV-S2': [('ISOS-L-1', 'MPP', 'ISOS-L-1')],
+    }
+    assert [each.name for each in project.general_groups] == [
+        'Setup logs',
+        'Weather information',
+        'General',
+    ]
+    # The series of a sample references its sample entry.
+    assert [
+        each.sample_identity.entry.m_resolved().lab_id for each in project.sample_series
+    ] == ['RPV-S1', 'RPV-S2']

@@ -22,9 +22,10 @@ The definitions are taken from `nomad-baseclasses` (nomad-hzb/nomad-baseclasses,
 version 1.0.1), reduced to what a stability project describes, so that this plugin
 does not depend on that package. Names and units are kept, including the class name
 `SolcarCellSample`, so that the data maps one to one. Differences: the sections that
-are entries of their own also inherit `EntryData`, and the normalizers that rely on
+are entries of their own also inherit `EntryData`; the normalizers that rely on
 other parts of `nomad-baseclasses` (naming normalizers, solar cell results) are left
-out.
+out; and `SolcarCellSample.sample_id` is the identifier as text, as in the file
+entries, rather than a section of readable identifiers.
 """
 
 import numpy as np
@@ -34,37 +35,10 @@ from nomad.datamodel.metainfo.basesections import (
     CompositeSystemReference,
     Entity,
     Process,
-    ReadableIdentifiers,
 )
 from nomad.metainfo import Quantity, Reference, SchemaPackage, Section, SubSection
 
 m_package = SchemaPackage()
-
-
-class ReadableIdentifiersCustom(ReadableIdentifiers):
-    """The identifiers of a sample, with the identifier the lab writes on it."""
-
-    m_def = Section(a_eln=dict(hide=['sample_owner', 'sample_short_name', 'sample_id']))
-
-    sample_owner = Quantity(
-        type=str, shape=[], a_eln=dict(component='StringEditQuantity')
-    )
-
-    sample_short_name = Quantity(
-        type=str, shape=[], a_eln=dict(component='StringEditQuantity')
-    )
-
-    sample_id = Quantity(type=str, shape=[], a_eln=dict(component='StringEditQuantity'))
-
-    def normalize(self, archive, logger):
-        if self.sample_owner:
-            self.owner = self.sample_owner
-        if self.sample_short_name:
-            self.short_name = self.sample_short_name
-        if self.sample_id and self.lab_id is None:
-            self.lab_id = self.sample_id
-
-        super().normalize(archive, logger)
 
 
 class LayerProperties(ArchiveSection):
@@ -333,7 +307,7 @@ class ModuleConfiguration(ArchiveSection):
     )
 
 
-class SolcarCellSample(CompositeSystem, EntryData):
+class SolarCellSample(CompositeSystem, EntryData):
     """A photovoltaic device: its substrate with the layer stack, its architecture
     and, for a module, how its pixels are connected."""
 
@@ -373,7 +347,15 @@ class SolcarCellSample(CompositeSystem, EntryData):
 
     number_of_junctions = Quantity(type=int, a_eln=dict(component='NumberEditQuantity'))
 
-    sample_id = SubSection(section_def=ReadableIdentifiersCustom)
+    sample_id = Quantity(
+        type=str,
+        description="""
+        The identifier of the sample as the institution writes it, the same as the
+        `sample_identity.sample_id` of its files. Also the sample's `lab_id`, unless
+        that is given.
+        """,
+        a_eln=dict(component='StringEditQuantity'),
+    )
     parent = SubSection(section_def=CompositeSystemReference)
 
     module_configuration = SubSection(
@@ -383,6 +365,14 @@ class SolcarCellSample(CompositeSystem, EntryData):
             'Orthogonal to the number of junctions — a tandem can also be a module.'
         ),
     )
+
+    def normalize(self, archive, logger):
+        """Takes the `lab_id`, by which NOMAD finds the sample, from `sample_id`
+        where none is given."""
+        self.sample_id = self.sample_id.strip() if self.sample_id else None
+        if self.sample_id and self.lab_id is None:
+            self.lab_id = self.sample_id
+        super().normalize(archive, logger)
 
 
 class LayerDeposition(Process):
