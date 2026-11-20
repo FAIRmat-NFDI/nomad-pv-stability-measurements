@@ -19,7 +19,7 @@ TIMELINE_LINE_WIDTH = 3
 #: markers at its start and end are opaque.
 TIMELINE_LINE_OPACITY = 0.35
 
-#: The colours of the stability file types in the timeline. NOMAD's GUI shows a figure
+#: The colours of the data types in the timeline. NOMAD's GUI shows a figure
 #: on a light or a dark background, so each colour keeps a contrast of at least 3:1
 #: to white and to near-black, and the colours stay apart for colour-blind readers.
 #: Other kinds are grey; the hover text names them.
@@ -72,7 +72,7 @@ def file_timeline(
     rows: list[tuple[str, list[str]]], entries: dict
 ) -> list[PlotlyFigure]:
     """A figure with one row per group and one line per file from the start to the
-    end of the period its data cover, coloured by stability file type. Hovering over
+    end of the period its data cover, coloured by data type. Hovering over
     a file's
     markers shows the file name, its sample, start and end time, and kind. A circle
     marks the start and a smaller triangle the end, both in the kind's full colour
@@ -100,7 +100,7 @@ def file_timeline(
 
     # Imported here, because the schema package imports this module.
     from nomad_pv_stability_measurements.schema_packages.schema_package import (
-        STABILITY_FILE_TYPES,
+        DATA_TYPES,
     )
 
     def plottable(path):
@@ -113,9 +113,9 @@ def file_timeline(
     for row, (name, paths) in enumerate(rows):
         for path in filter(plottable, paths):
             entry = entries[path]
-            files_by_kind.setdefault(entry.stability_file_type or 'unknown', []).append(
-                (row, name, path, entry)
-            )
+            files_by_kind.setdefault(
+                (entry.file.data_type if entry.file else None) or 'unknown', []
+            ).append((row, name, path, entry))
     if not files_by_kind:
         return []
 
@@ -129,7 +129,7 @@ def file_timeline(
             time = time.replace(tzinfo=timezone.utc)
         return time.astimezone(zone).replace(tzinfo=None)
 
-    kinds = sorted(files_by_kind, key=STABILITY_FILE_TYPES.index)
+    kinds = sorted(files_by_kind, key=DATA_TYPES.index)
     spacing = TIMELINE_ROW_SPREAD / max(len(kinds) - 1, 1)
     outline = dict(color=TIMELINE_OUTLINE_COLOR, width=TIMELINE_OUTLINE_WIDTH)
     lines, ends, starts = [], [], []

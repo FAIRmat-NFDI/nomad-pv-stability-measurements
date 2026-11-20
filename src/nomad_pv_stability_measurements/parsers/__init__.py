@@ -13,8 +13,8 @@ class StabilityFileParserEntryPoint(ParserEntryPoint):
 stability_file_parser_entry_point = StabilityFileParserEntryPoint(
     name='StabilityFileParser',
     description="""
-    Registers every file of a stability upload with its stability file type, file
-    format, provenance, times and sample.
+    Registers every file of a stability upload with its data type, file
+    format, method, times and sample.
     """,
     # Any file except NOMAD archive files, which must stay with NOMAD's own parser,
     # files whose name starts with a dot, and the project data spreadsheet and its

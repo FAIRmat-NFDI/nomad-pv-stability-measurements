@@ -30,12 +30,12 @@ UNKNOWN_SAMPLE = 'Unknown'
 #: calibration or a reference spectrum measured elsewhere, that name no sample.
 GENERAL_GROUP = 'General'
 
-#: Stability file types that are never about a sample, such as sensor readings of
+#: Data types that are never about a sample, such as sensor readings of
 #: a climate chamber or of an outdoor site's weather station, or a description of
 #: the project: the project entry lists them in the group named here, whatever
 #: sample they name.
 #: Measured and simulated files alike. The groups are ordered as first named here.
-GENERAL_FILE_TYPES = {
+GENERAL_DATA_TYPES = {
     'setup_log': 'Setup logs',
     'environment_log': 'Setup logs',
     'weather_information': 'Weather information',
@@ -193,7 +193,8 @@ def applied_standards(
 
 def stability_activity(values: dict, data: dict | None = None) -> 'StabilityActivity':
     """The entry of a file with `values` as the file parser finds them: the
-    quantities of the activity; `file` and `file_format`, which make its `file`; and
+    quantities of the activity; `file` (the path), `data_type`, `file_format`,
+    `file_ending` and `file_size`, which make its `file`; and
     `sample_id`, `sample` (the reference to the sample entry) and `sample_reference`,
     which make its `sample_identity`.
 
@@ -211,7 +212,11 @@ def stability_activity(values: dict, data: dict | None = None) -> 'StabilityActi
     path = values.pop('file', None)
     if path is not None:
         values['file'] = StabilityFile(
-            path=path, file_format=values.pop('file_format', 'unknown')
+            path=path,
+            data_type=values.pop('data_type', 'unknown'),
+            file_format=values.pop('file_format', 'unknown'),
+            file_ending=values.pop('file_ending', None),
+            file_size=values.pop('file_size', None),
         )
     identity = {
         'sample_id': values.pop('sample_id', None),
@@ -244,15 +249,15 @@ def sample_series(sample_id: str, sample_ids: frozenset) -> 'StabilityActivityGr
 def group_of(entry: 'StabilityActivity | None') -> tuple[tuple, str]:
     """The group of a file's entry, as a key that orders the groups (samples, then
     the general groups, then the unknown sample) and the group's name."""
-    general = list(dict.fromkeys(GENERAL_FILE_TYPES.values()))
-    file_type = entry.stability_file_type if entry else None
-    if file_type in GENERAL_FILE_TYPES:
-        name = GENERAL_FILE_TYPES[file_type]
+    general = list(dict.fromkeys(GENERAL_DATA_TYPES.values()))
+    file_type = entry.file.data_type if entry and entry.file else None
+    if file_type in GENERAL_DATA_TYPES:
+        name = GENERAL_DATA_TYPES[file_type]
         return (1, general.index(name)), name
     identity = entry.sample_identity if entry else None
     sample_id = identity.sample_id if identity else None
     if sample_id and sample_id != UNKNOWN_SAMPLE:
         return (0, sample_id), sample_id
-    if entry is not None and entry.provenance == 'reference':
+    if entry is not None and entry.method == 'calibration':
         return (1, general.index(GENERAL_GROUP)), GENERAL_GROUP
     return (2, UNKNOWN_SAMPLE), UNKNOWN_SAMPLE

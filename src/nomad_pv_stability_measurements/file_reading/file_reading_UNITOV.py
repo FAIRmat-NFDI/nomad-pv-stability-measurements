@@ -54,7 +54,7 @@ def _match(
 ) -> tuple | bool:
     """What every `match_<kind>` function returns: `False` unless the file at `path`
     is a UNITOV text file whose `Test` line is `test`, otherwise its start and end
-    time, provenance and sample. Every UNITOV file is measured at a station.
+    time, method and sample. Every UNITOV file is measured at a station.
 
     `mppt` also checks the `Algorithm` line: `True` if it must be `MPPT`, `False` if
     it must not, `None` to ignore it. For a `series`, the last row gives the end
@@ -83,11 +83,11 @@ def _match(
         hours = _hours_of_last_row(read_tail(path, TAIL_SIZE))
         if hours is not None:
             end_time = start_time + timedelta(hours=hours)
-    provenance = 'measured'
+    method = 'measurement'
     sample_id = header.get('Device') or None
     sample_reference = None
     data = {}
-    return start_time, end_time, provenance, sample_id, sample_reference, data
+    return start_time, end_time, method, sample_id, sample_reference, data
 
 
 def _hours_of_last_row(tail: str) -> float | None:

@@ -36,25 +36,25 @@ def _helper_header_start_time(content: str) -> datetime:
 #----------------------------- MATCHING FUNCTIONS -----------------------------
 # Please write one such function for each filetype provided by the institution.
 # The functions should return False for every file that is not a match, and a tuple of
-# (start_time, end_time, provenance, sample_id, sample_reference, data) for
+# (start_time, end_time, method, sample_id, sample_reference, data) for
 # every file that is a match. return values should be as follows:
 
 # start_time: Absolute start time of the measurement, as a datetime with time zone. 
 # end_time: Absolute end time of the measurement, as a datetime with time zone. If not known, return None.
-# provenance: One of the available provenance values (see below).
+# method: How the data came to be, one of the available method values (see below).
 # sample_id: The id of the sample/simulation run refering to the file.
 # sample_reference: An external reference to the sample, if available.
 # data: A dictionary for file-type specific file contents, can stay empty for now.
 
-# AVAILABLE PROVANCE VALUES:
-# 'measured': 'Measured on the sample.',
-# 'simulated': 'Computed by a model of the sample.',
-# 'derived': 'Computed from other data, such as figures of merit fitted to measured curves.'
-# 'imported': 'Taken from another source, such as a database.',
+# AVAILABLE METHOD VALUES:
+# 'measurement': 'Measured on the studied sample.',
+# 'calibration': 'Measured on a reference device or standard rather than on the studied sample, such as the light source with a reference cell.',
+# 'simulation': 'Computed from a model of the sample without measured input, such as a drift-diffusion simulation.',
+# 'analysis': 'Computed from other data, such as figures of merit fitted to J-V curves or lifetimes such as T80 from a series.',
+# 'database': 'Taken from a database.',
 # 'literature': 'Taken from a publication.',
 # 'note': 'Written by hand, such as lab notes or values typed in.',
-# 'reference': 'Measured on a reference device or standard rather than on the sample or studied, such as a calibration.'
-# 'other': 'From a source that none of the other values describes.',
+# 'other': 'In a way that none of the other values describes.',
 # 'unknown': 'Not known.',
 
 #Exemplary JV matching function.
@@ -73,14 +73,14 @@ def match_jv(path: str) -> tuple | bool:
 
     end_time = None
 
-    provenance = 'measured'  # Determine
+    method = 'measurement'  # Determine
 
     sample_id = _helper_header_value(content, 'Device') or os.path.splitext(os.path.basename(path))[0]  
 
     sample_reference = None 
 
     data = {}
-    return start_time, end_time, provenance, sample_id, sample_reference, data
+    return start_time, end_time, method, sample_id, sample_reference, data
 
 #Exemplary MPPT matching function.
 def match_mpp_tracking(path: str) -> tuple | bool:
@@ -103,13 +103,13 @@ def match_mpp_tracking(path: str) -> tuple | bool:
     last_row = content.strip().splitlines()[-1]
     end_time = start_time + timedelta(hours=float(last_row.split('\t')[0]))
 
-    provenance = 'measured'
+    method = 'measurement'
     sample_id = (
         _helper_header_value(content, 'Device') or os.path.splitext(os.path.basename(path))[0]
     )
     sample_reference = None
     data = {}
-    return start_time, end_time, provenance, sample_id, sample_reference, data
+    return start_time, end_time, method, sample_id, sample_reference, data
 
 
 
@@ -119,7 +119,7 @@ if __name__ == '__main__':
 
     match_functions = [match_jv, match_mpp_tracking] #add all your match functios here
 
-    names = ('datetime', 'end_time', 'provenance', 'sample_id', 'sample_reference', 'data')
+    names = ('datetime', 'end_time', 'method', 'sample_id', 'sample_reference', 'data')
 
     for file_name in test_files:
         file_path = os.path.join(os.path.dirname(__file__), file_name)

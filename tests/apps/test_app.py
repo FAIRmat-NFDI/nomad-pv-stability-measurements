@@ -37,7 +37,7 @@ def test_stability_files_app_uses_quantities_of_the_file_entries():
     }
     assert {
         'sample_identity.sample_id',
-        'stability_file_type',
+        'file.data_type',
         'datetime',
         'duration',
         'file.path',

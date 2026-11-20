@@ -2,6 +2,7 @@
 the file as its output."""
 
 import json
+import os
 from typing import TYPE_CHECKING
 
 from nomad.datamodel.context import ServerContext
@@ -25,7 +26,7 @@ from nomad_pv_stability_measurements.parsers.utils import (
     uploader_email,
 )
 from nomad_pv_stability_measurements.schema_packages.schema_package import (
-    STABILITY_FILE_TYPES,
+    DATA_TYPES,
     ProjectData,
 )
 from nomad_pv_stability_measurements.schema_packages.utils import (
@@ -57,7 +58,7 @@ def register_file(
 
     The institution's `match_<kind>` functions get `os_path` and read the file
     themselves. They are asked in the order of
-    `STABILITY_FILE_TYPES`, and the first that recognizes the file, by not returning
+    `DATA_TYPES`, and the first that recognizes the file, by not returning
     `False`, decides. A function that fails is logged as a warning and treated as not
     recognizing the file. A file whose function gives no end time ends when it
     starts.
@@ -67,7 +68,15 @@ def register_file(
     institution that no function recognizes is of kind `unknown` and logged as a
     warning.
     """
-    values = {'file': path, 'file_format': file_format_from_path(path)}
+    values = {
+        'file': path,
+        'file_format': file_format_from_path(path),
+        'file_ending': os.path.splitext(path)[1] or None,
+    }
+    try:
+        values['file_size'] = os.path.getsize(os_path)
+    except OSError:
+        pass
 
     institution = institution_of(path, email)
     if institution is None:
@@ -87,7 +96,7 @@ def register_file(
         )
 
     values['location'] = institution.INSTITUTION
-    for kind in STABILITY_FILE_TYPES:
+    for kind in DATA_TYPES:
         match = getattr(institution, f'match_{kind}', None)
         if match is None:
             continue
@@ -104,12 +113,12 @@ def register_file(
         if result is False:
             continue
 
-        start_time, end_time, provenance, sample_id, sample_reference, data = result
+        start_time, end_time, method, sample_id, sample_reference, data = result
         found = {
-            'stability_file_type': kind,
+            'data_type': kind,
             'datetime': start_time,
             'end_time': start_time if end_time is None else end_time,
-            'provenance': provenance,
+            'method': method,
             'sample_id': clean_sample_id(sample_id),
             'sample_reference': sample_reference,
         }

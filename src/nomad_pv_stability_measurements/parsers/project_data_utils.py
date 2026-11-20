@@ -51,6 +51,7 @@ from nomad_pv_stability_measurements.schema_packages.schema_package import (
     ProjectData,
     SampleIdentity,
     StabilityActivity,
+    StabilityFile,
 )
 from nomad_pv_stability_measurements.schema_packages.utils import (
     split_commas,
@@ -123,18 +124,21 @@ standards.
 #: `StabilityActivity` that a row can give for the files it matches.
 FILE_COLUMNS = (
     'files',
-    'stability_file_type',
+    'data_type',
+    'method',
     'datetime',
     'end_time',
     'duration',
-    'provenance',
     'sample_id',
     'sample_reference',
     'description',
 )
 
+#: Columns of the sheet `files` that fill the file entry's `file`.
+FILE_SECTION_COLUMNS = ('data_type',)
+
 #: Earlier headers of columns of the sheet `files`, read under their current name.
-FILE_COLUMN_ALIASES = {'measurement_kind': 'stability_file_type'}
+FILE_COLUMN_ALIASES = {'measurement_kind': 'data_type'}
 
 #: Columns of the sheet `files` that fill the file entry's `sample_identity`, by
 #: the quantity of `SampleIdentity` they fill.
@@ -269,9 +273,11 @@ class FileRow(NamedTuple):
 
 def file_column_quantity(name: str):
     """The quantity that the column `name` of the sheet `files` fills: one of
-    `StabilityActivity`, or of its `SampleIdentity`."""
+    `StabilityActivity`, of its `SampleIdentity` or of its `StabilityFile`."""
     if name in SAMPLE_IDENTITY_COLUMNS:
         return SampleIdentity.m_def.all_quantities[SAMPLE_IDENTITY_COLUMNS[name]]
+    if name in FILE_SECTION_COLUMNS:
+        return StabilityFile.m_def.all_quantities[name]
     return StabilityActivity.m_def.all_quantities[name]
 
 

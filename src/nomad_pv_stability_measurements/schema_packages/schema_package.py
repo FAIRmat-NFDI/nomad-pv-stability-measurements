@@ -22,6 +22,7 @@ from nomad.datamodel.metainfo.annotations import (
     SectionDisplayAnnotation,
 )
 from nomad.datamodel.metainfo.basesections.v2 import Activity, ActivityResult
+from nomad.datamodel.metainfo.eln import ElnParserRawFile
 from nomad.datamodel.metainfo.plot import PlotSection
 from nomad.datamodel.metainfo.workflow import Link
 from nomad.datamodel.results import Results
@@ -65,7 +66,7 @@ m_package = SchemaPackage()
 #: What a file of a stability upload holds, e.g. a J-V curve or an environment
 #: log. New types may be added; existing ones are never removed or renamed, so
 #: that stored entries stay valid.
-STABILITY_FILE_TYPES = [
+DATA_TYPES = [
     'jv',
     'dark_jv',
     'mpp_tracking',
@@ -97,7 +98,7 @@ STABILITY_FILE_TYPES = [
 ]
 
 #: How a file is stored, independent of what it contains. Same rule as for
-#: `STABILITY_FILE_TYPES`: values are only ever added.
+#: `DATA_TYPES`: values are only ever added.
 FILE_FORMATS = [
     'csv',
     'tsv',
@@ -123,22 +124,27 @@ FILE_FORMATS = [
     'unknown',
 ]
 
-#: Where the data of a file comes from, with what each value means. Same rule as for
-#: `STABILITY_FILE_TYPES`: values are only ever added.
-PROVENANCES = {
-    'measured': 'Measured on the sample.',
-    'simulated': 'Computed by a model of the sample.',
-    'derived': (
-        'Computed from other data, such as figures of merit fitted to measured curves.'
+#: How the data of a file came to be, with what each value means: one value per
+#: file, independent of what the file holds (`DATA_TYPES`). Same rule as for
+#: `DATA_TYPES`: values are only ever added.
+METHODS = {
+    'measurement': 'Measured on the studied sample.',
+    'calibration': (
+        'Measured on a reference device or standard rather than on the studied '
+        'sample, such as the light source with a reference cell.'
     ),
-    'imported': 'Taken from another source, such as a database.',
+    'simulation': (
+        'Computed from a model of the sample without measured input, such as a '
+        'drift-diffusion simulation.'
+    ),
+    'analysis': (
+        'Computed from other data, such as figures of merit fitted to J-V curves or '
+        'lifetimes such as T80 from a series.'
+    ),
+    'database': 'Taken from a database.',
     'literature': 'Taken from a publication.',
     'note': 'Written by hand, such as lab notes or values typed in.',
-    'reference': (
-        'Measured on a reference device or standard rather than on the sample '
-        'studied, such as a calibration.'
-    ),
-    'other': 'From a source that none of the other values describes.',
+    'other': 'In a way that none of the other values describes.',
     'unknown': 'Not known.',
 }
 
@@ -175,17 +181,35 @@ class SampleIdentity(ArchiveSection):
     )
 
 
-class StabilityFile(ActivityResult):
+class StabilityFile(ActivityResult, ElnParserRawFile):
     """
     A file of a stability upload, the output of the activity that produced its data
-    (`StabilityActivity`): where it is in the upload and how it is stored. Its
-    `name` is its path.
+    (`StabilityActivity`): where it is in the upload (`path`), what it holds
+    (`data_type`) and how it is stored (`file_format`, `file_ending`, `file_size`).
+    Its `name` is its path. The `eln` reference of a raw file is not used: the
+    activity that contains the file describes it.
     """
+
+    m_def = Section(
+        label_quantity='path',
+        a_display=SectionDisplayAnnotation(visible=Filter(exclude=['eln'])),
+    )
 
     path = Quantity(
         type=str,
-        description='The path of the file, relative to the upload.',
+        description="""
+        The path of the file, relative to the upload. Set by the parser that
+        registered the file: the entry belongs to this file.
+        """,
         a_browser=BrowserAnnotation(adaptor=BrowserAdaptors.RawFileAdaptor),
+    )
+    data_type = Quantity(
+        type=MEnum(*DATA_TYPES),
+        default='unknown',
+        description="""
+        What the file holds, e.g. a J-V curve, MPP tracking or an environment log.
+        The same file format can hold different types of files.
+        """,
     )
     file_format = Quantity(
         type=MEnum(*FILE_FORMATS),
@@ -210,14 +234,15 @@ class StabilityActivity(Activity):
     data cover. Its `name`, which also names the entry, is the file's path in the
     upload; its `lab_id`, unique in NOMAD, is `<proposal_number>:<path>`, or
     `<upload_id>:<path>` without a proposal number; its `method`, by which NOMAD's
-    apps find it, is its `stability_file_type`; its `description` comes from the
-    sheet `files`; its `location` is the institution of the file. The activity's
+    apps find it, is how the data came to be, such as a measurement or a
+    simulation, while the file's `data_type` says what it holds; its `description`
+    comes from the sheet `files`; its `location` is the institution of the file. The activity's
     `steps` are not used. Its workflow
     has the file as output and the sample entry, where known, as input.
     """
 
     m_def = Section(
-        a_display=SectionDisplayAnnotation(visible=Filter(exclude=['steps', 'method']))
+        a_display=SectionDisplayAnnotation(visible=Filter(exclude=['steps']))
     )
 
     file = SubSection(
@@ -237,14 +262,14 @@ class StabilityActivity(Activity):
         """,
     )
 
-    stability_file_type = Quantity(
-        type=MEnum(*STABILITY_FILE_TYPES),
-        default='unknown',
-        # The name until 2026-11, so that stored entries keep their value.
-        aliases=['measurement_kind'],
+    method = Quantity(
+        type=MEnum(*METHODS, m_descriptions=METHODS),
+        default='measurement',
         description="""
-        What the file holds, e.g. a J-V curve, MPP tracking or an environment log.
-        The same file format can hold different types of files.
+        How the file's data came to be, e.g. measured on the sample, simulated or
+        taken from a publication; each value is described with the enumeration.
+        Independent of the file's `data_type`: a simulation can yield J-V curves as a
+        measurement does.
         """,
     )
 
@@ -271,15 +296,6 @@ class StabilityActivity(Activity):
         """,
     )
 
-    provenance = Quantity(
-        type=MEnum(*PROVENANCES, m_descriptions=PROVENANCES),
-        default='measured',
-        description="""
-        Where the data of the file comes from; each value is described with the
-        enumeration.
-        """,
-    )
-
     sample_identity = SubSection(
         section_def=SampleIdentity,
         description='The sample the file is about. Empty if nothing names one.',
@@ -299,16 +315,14 @@ class StabilityActivity(Activity):
     def normalize(self, archive: 'EntryArchive', logger: 'BoundLogger') -> None:
         """Names the section, and so the entry, and the file after the file's path,
         gives it the
-        lab ID `<upload_id>:<path>` where the project data gave none, takes the
-        method from the stability file type, and derives the `duration` from the
-        times."""
+        lab ID `<upload_id>:<path>` where the project data gave none, and derives
+        the `duration` from the times."""
         path = self.file.path if self.file is not None else None
         if path is not None:
             self.name = self.file.name = path
             upload_id = archive.metadata.upload_id if archive.metadata else None
             if self.lab_id is None and upload_id is not None:
                 self.lab_id = unique_lab_id(upload_id, path)
-        self.method = self.stability_file_type
         # The base section writes into `results`, which it expects to exist.
         if archive.results is None:
             archive.results = Results()
@@ -330,7 +344,7 @@ class StabilityActivityGroup(ArchiveSection):
     """A group of the activities of a stability upload, one per file, ordered by when
     their data start: either the series of one sample, its stability test, with the
     sample and the standards applied to it; or the activities that belong to no
-    sample, of a general type (`GENERAL_FILE_TYPES`, e.g. `Setup logs`, and
+    sample, of a general type (`GENERAL_DATA_TYPES`, e.g. `Setup logs`, and
     `GENERAL_GROUP`) or of an unknown sample (`UNKNOWN_SAMPLE`), without sample and
     standards."""
 
@@ -388,7 +402,7 @@ class ProjectData(PlotSection, EntryData, TableData):
     themselves; an import only checks it and reports its errors here.
 
     The timeline has one row per group and one line per file from its start to
-    its end, coloured by stability file type.
+    its end, coloured by data type.
     """
 
     data_file = Quantity(
@@ -589,7 +603,7 @@ class ProjectData(PlotSection, EntryData, TableData):
         repeats=True,
         description=f"""
         The files that belong to no sample: one group per general type of files
-        (`GENERAL_FILE_TYPES`), such as the setup logs, and `{GENERAL_GROUP}`; last
+        (`GENERAL_DATA_TYPES`), such as the setup logs, and `{GENERAL_GROUP}`; last
         `{UNKNOWN_SAMPLE}`, the files whose sample is not known. Derived on every
         normalization. Each file of the upload is in exactly one series or group.
         """,
@@ -605,7 +619,7 @@ class ProjectData(PlotSection, EntryData, TableData):
         taken and imported.
 
         Then derives the overview: every registered file of the upload in a series,
-        of its sample or of its general kind (`GENERAL_FILE_TYPES`), as a reference
+        of its sample or of its general kind (`GENERAL_DATA_TYPES`), as a reference
         to the entry of its activity, `institutions` from the files'
         institution folders or
         else the uploader's email domain, and the timeline. A file of no general kind

@@ -87,12 +87,12 @@ def test_summary_references_the_entry_of_every_file(staging_upload):
 
     # Following a reference gives the activity of that file.
     jv, pdf = activities(summary)
-    assert (jv.file.path, jv.stability_file_type, jv.sample_identity.sample_id) == (
+    assert (jv.file.path, jv.file.data_type, jv.sample_identity.sample_id) == (
         'UNITOV/run_1/001_JV.txt',
         'jv',
         '3C_C1_1',
     )
-    assert (pdf.file.path, pdf.stability_file_type) == (
+    assert (pdf.file.path, pdf.file.data_type) == (
         'UNITOV/run_1/plot.pdf',
         'unknown',
     )

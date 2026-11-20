@@ -49,9 +49,11 @@ def test_UNITOV_file_is_registered_with_kind_sample_and_start(tmp_path):
 
     assert data.file.path == 'UNITOV/run_1/001_JV.txt'
     assert data.location == 'UNITOV'
-    assert data.stability_file_type == 'jv'
+    assert data.file.data_type == 'jv'
     assert data.file.file_format == 'txt'
-    assert data.provenance == 'measured'
+    assert data.file.file_ending == '.txt'
+    assert data.file.file_size.magnitude == len(UNITOV_JV.encode())
+    assert data.method == 'measurement'
     assert data.sample_identity.sample_id == '3C_C1_1'
     # 18:34:18 local time in Rome, in summer time (UTC+2).
     assert data.datetime == datetime(2023, 10, 19, 16, 34, 18, tzinfo=timezone.utc)
@@ -73,7 +75,7 @@ def test_UNITOV_series_are_told_apart(tmp_path, test, algorithm, kind):
 
     data = parse(tmp_path, 'UNITOV/run_1/000_series.txt', content.encode()).data
 
-    assert data.stability_file_type == kind
+    assert data.file.data_type == kind
     # Each series ends at its last row, half an hour after its start.
     assert data.end_time == datetime(2023, 10, 19, 17, 4, 18, tzinfo=timezone.utc)
 
@@ -97,7 +99,7 @@ def test_UNITOV_file_ends_at_its_last_row_or_else_when_it_starts(tmp_path):
     tracked = parse(tmp_path, tracking_path, UNITOV_LONG_TRACKING.encode()).data
     swept = parse(tmp_path, 'UNITOV/run_1/001_JV.txt', UNITOV_JV.encode()).data
 
-    assert tracked.stability_file_type == 'mpp_tracking'
+    assert tracked.file.data_type == 'mpp_tracking'
     # Two hours after the start at 18:34:18 in Rome.
     assert tracked.end_time == datetime(2023, 10, 19, 18, 34, 18, tzinfo=timezone.utc)
     assert swept.end_time == swept.datetime
@@ -108,7 +110,7 @@ def test_institution_without_tail_gets_no_end_from_the_last_row(tmp_path, monkey
     tracking_path = 'UNITOV/run_1/000_Tracking.txt'
     tracked = parse(tmp_path, tracking_path, UNITOV_LONG_TRACKING.encode()).data
 
-    assert tracked.stability_file_type == 'mpp_tracking'
+    assert tracked.file.data_type == 'mpp_tracking'
     assert tracked.end_time == tracked.datetime
 
 
@@ -136,7 +138,7 @@ def test_unrecognized_file_is_registered_as_unknown(tmp_path, path, content, log
     assert [log['log_level'] for log in logs] == [log_level]
 
     assert data.file.path == path
-    assert data.stability_file_type == 'unknown'
+    assert data.file.data_type == 'unknown'
     assert data.sample_identity is None
     assert data.datetime is None
 
@@ -160,7 +162,7 @@ def test_file_in_no_institution_folder_belongs_to_the_uploaders_institution(
     data = parse(tmp_path, path, UNITOV_JV.encode(), email).data
 
     assert data.location == institution
-    assert data.stability_file_type == kind
+    assert data.file.data_type == kind
 
 
 @pytest.mark.parametrize(
@@ -224,8 +226,7 @@ def test_a_file_entry_is_named_after_its_path_and_found_by_nomads_search():
 
     path = 'UNITOV/run_2/001_JV.txt'
     entry = StabilityActivity(
-        file=StabilityFile(path=path),
-        stability_file_type='jv',
+        file=StabilityFile(path=path, data_type='jv'),
         description='Second run after recovery.',
     )
     archive = EntryArchive(
@@ -240,8 +241,8 @@ def test_a_file_entry_is_named_after_its_path_and_found_by_nomads_search():
         ['StabilityActivity'],
         [path],
         ['Second run after recovery.'],
-        # The stability file type is the method by which apps find the file.
-        ['jv'],
+        # Without a given method, the file is a measurement.
+        ['measurement'],
     )
     # Without a proposal number, the upload makes the lab ID unique in NOMAD.
     assert eln.lab_ids == ['upload_1:UNITOV/run_2/001_JV.txt']

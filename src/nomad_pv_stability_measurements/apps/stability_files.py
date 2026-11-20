@@ -37,7 +37,7 @@ stability_files_app = App(
     description='Search and plot the files of stability uploads.',
     readme="""
     Every file of a stability upload, measured, simulated or from elsewhere, with its
-    sample, stability file type and the period its data cover. Files appear here as
+    sample, data type and the period its data cover. Files appear here as
     soon as their upload is processed. Narrow
     the files down with the menu on the left, for example to one upload or one
     sample, or by selecting a range in the histograms; open a file's entry from the
@@ -53,10 +53,11 @@ stability_files_app = App(
             selected=True,
         ),
         Column(
-            quantity=quantity('stability_file_type'),
-            label='File type',
+            quantity=quantity('file.data_type'),
+            label='Data type',
             selected=True,
         ),
+        Column(quantity=quantity('method'), label='Method', selected=True),
         Column(quantity=quantity('datetime'), label='Start', selected=True),
         Column(
             quantity=quantity('duration'),
@@ -69,7 +70,6 @@ stability_files_app = App(
         Column(quantity='upload_name', label='Upload', selected=True),
         Column(quantity=quantity('end_time'), label='End'),
         Column(quantity=quantity('file.file_format'), label='Format'),
-        Column(quantity=quantity('provenance'), label='Provenance'),
         Column(
             quantity=quantity('sample_identity.external_reference'),
             label='Sample reference',
@@ -83,11 +83,11 @@ stability_files_app = App(
         items=[
             MenuItemTerms(search_quantity='upload_name', title='Upload'),
             MenuItemTerms(
-                search_quantity=quantity('stability_file_type'),
-                title='Stability file type',
+                search_quantity=quantity('file.data_type'),
+                title='Data type',
             ),
+            MenuItemTerms(search_quantity=quantity('method'), title='Method'),
             MenuItemTerms(search_quantity=quantity('location'), title='Institution'),
-            MenuItemTerms(search_quantity=quantity('provenance'), title='Provenance'),
             MenuItemHistogram(x={'search_quantity': quantity('datetime')}),
             MenuItemHistogram(x={'search_quantity': quantity('duration')}),
         ],

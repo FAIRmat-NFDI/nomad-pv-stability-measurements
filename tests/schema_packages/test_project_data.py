@@ -95,16 +95,16 @@ def test_project_data_is_read_from_the_spreadsheet(staging_upload, tmp_path):
         tmp_path,
         PROJECT,
         files=[
-            {'files': 'UNITOV/*', 'provenance': 'measured'},
+            {'files': 'UNITOV/*', 'method': 'measurement'},
             {
                 'files': 'HZB/simulation/*.csv',
-                'stability_file_type': 'jv',
-                'provenance': 'simulated',
+                'data_type': 'jv',
+                'method': 'simulation',
                 'datetime': '2026-01-05T10:00:00+01:00',
                 'sample_id': ' S1 ',
             },
-            {'files': '../outside/*', 'stability_file_type': 'jv'},
-            {'files': 'UNITOV/*.txt', 'stability_file_type': 'JV curve'},
+            {'files': '../outside/*', 'data_type': 'jv'},
+            {'files': 'UNITOV/*.txt', 'data_type': 'JV curve'},
         ],
     )
     with capture_logs() as logs:
@@ -122,7 +122,7 @@ def test_project_data_is_read_from_the_spreadsheet(staging_upload, tmp_path):
     errors = [
         (log['row'], log['column']) for log in logs if log['log_level'] == 'error'
     ]
-    assert errors == [(4, 'files'), (5, 'stability_file_type')]
+    assert errors == [(4, 'files'), (5, 'data_type')]
 
 
 def save(upload, path: str, data) -> None:
@@ -210,26 +210,16 @@ def test_the_projects_external_references_are_read_from_their_sheet(
     assert errors == [(4, 'url')]
 
 
-def test_files_stored_or_described_as_measurement_kind_keep_their_type(
-    staging_upload, tmp_path
-):
-    """`stability_file_type` was called `measurement_kind`."""
-    from nomad_pv_stability_measurements.schema_packages.schema_package import (
-        StabilityActivity,
-    )
-
-    assert StabilityActivity.m_from_dict(
-        {'measurement_kind': 'jv'}
-    ).stability_file_type == ('jv')
-
+def test_files_described_as_measurement_kind_keep_their_type(staging_upload, tmp_path):
+    """The column `data_type` was called `measurement_kind`."""
     path = spreadsheet(
         tmp_path,
         PROJECT,
-        files=[{'files': 'env/chamber.csv', 'stability_file_type': 'environment_log'}],
+        files=[{'files': 'env/chamber.csv', 'data_type': 'environment_log'}],
     )
     workbook = openpyxl.load_workbook(path)
     for cell in workbook['files'][1]:
-        if cell.value == 'stability_file_type':
+        if cell.value == 'data_type':
             cell.value = 'measurement_kind'
     workbook.save(path)
     with capture_logs() as logs:
@@ -244,25 +234,25 @@ def test_files_stored_or_described_as_measurement_kind_keep_their_type(
 
 def test_files_that_belong_to_no_sample_form_general_groups(staging_upload, tmp_path):
     files = [
-        {'files': 'UNITOV/*', 'provenance': 'measured'},
+        {'files': 'UNITOV/*', 'method': 'measurement'},
         # A general type ignores the sample, also for a simulation.
-        {'files': 'env/chamber.csv', 'stability_file_type': 'setup_log'},
+        {'files': 'env/chamber.csv', 'data_type': 'setup_log'},
         {
             'files': 'env/sim.csv',
-            'stability_file_type': 'setup_log',
-            'provenance': 'simulated',
+            'data_type': 'setup_log',
+            'method': 'simulation',
             'sample_id': 'S1',
         },
-        {'files': 'env/weather.csv', 'stability_file_type': 'weather_information'},
-        {'files': 'notes.txt', 'stability_file_type': 'metadata'},
+        {'files': 'env/weather.csv', 'data_type': 'weather_information'},
+        {'files': 'notes.txt', 'data_type': 'metadata'},
         # Reference data without sample, such as a calibration, are general too.
         {
             'files': 'calibration.csv',
-            'stability_file_type': 'jv',
-            'provenance': 'reference',
+            'data_type': 'jv',
+            'method': 'calibration',
         },
         # A file about a sample that names none is of an unknown sample.
-        {'files': 'lost.csv', 'stability_file_type': 'jv'},
+        {'files': 'lost.csv', 'data_type': 'jv'},
     ]
     process(
         staging_upload,
@@ -473,12 +463,12 @@ def test_file_entries_take_the_project_data_first(staging_upload, tmp_path):
         tmp_path,
         PROJECT,
         files=[
-            {'files': 'UNITOV/*', 'provenance': 'reference'},
-            {'files': 'UNITOV/run_2/*', 'provenance': 'derived'},
+            {'files': 'UNITOV/*', 'method': 'calibration'},
+            {'files': 'UNITOV/run_2/*', 'method': 'analysis'},
             {
                 'files': 'HZB/simulation/*.csv',
-                'stability_file_type': 'jv',
-                'provenance': 'simulated',
+                'data_type': 'jv',
+                'method': 'simulation',
                 'datetime': '2026-01-05T10:00:00+01:00',
                 'sample_id': 'S1',
                 'description': 'Drift-diffusion simulation of the fresh cell.',
@@ -502,8 +492,8 @@ def test_file_entries_take_the_project_data_first(staging_upload, tmp_path):
     }
 
     measured = entries['UNITOV/run_1/001_JV.txt']
-    # Matching gives kind, start and sample; the project data the provenance.
-    assert (measured.stability_file_type, measured.provenance) == ('jv', 'reference')
+    # Matching gives kind, start and sample; the project data the method.
+    assert (measured.file.data_type, measured.method) == ('jv', 'calibration')
     assert measured.datetime == datetime(2023, 10, 19, 16, 34, 18, tzinfo=timezone.utc)
     assert measured.sample_identity.entry.m_resolved().sample_id == 'S1'
     # Unique in NOMAD: the proposal number and the path, which runs do not share.
@@ -511,14 +501,14 @@ def test_file_entries_take_the_project_data_first(staging_upload, tmp_path):
     # A later row overrides an earlier one; the identifier differs in case.
     other = entries['UNITOV/run_2/001_JV.txt']
     identity = other.sample_identity
-    assert (other.provenance, identity.sample_id, identity.entry) == (
-        'derived',
+    assert (other.method, identity.sample_id, identity.entry) == (
+        'analysis',
         'S2',
         None,
     )
     # A file that no reading code recognizes is described completely.
     simulated = entries['HZB/simulation/jv.csv']
-    assert (simulated.stability_file_type, simulated.provenance) == ('jv', 'simulated')
+    assert (simulated.file.data_type, simulated.method) == ('jv', 'simulation')
     assert simulated.end_time == simulated.datetime
     assert simulated.description == 'Drift-diffusion simulation of the fresh cell.'
 
@@ -601,7 +591,7 @@ def test_the_example_upload_is_processed_without_problems(staging_upload):
     }
     assert sorted(entries) == sorted(files)
     simulated = entries['HZB/simulation/jv_simulated.csv']
-    assert (simulated.stability_file_type, simulated.provenance) == ('jv', 'simulated')
+    assert (simulated.file.data_type, simulated.method) == ('jv', 'simulation')
     # A simulation over model time has no times, only the length it covers.
     model = entries['simulation/degradation_model.csv']
     assert (model.datetime, model.duration.to('hour').magnitude) == (None, 1000)
