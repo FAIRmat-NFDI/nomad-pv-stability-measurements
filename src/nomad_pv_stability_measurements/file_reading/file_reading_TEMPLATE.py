@@ -1,6 +1,7 @@
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 import os
+import re
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 #: Short name of the institution
 INSTITUTION = 'TEMPLATE'
@@ -11,35 +12,29 @@ EMAIL_DOMAINS: tuple[str, ...] = ('uni.edu',)
 #: Time zone of the computers that write the files.
 LOCAL_TIME_ZONE = ZoneInfo('Europe/Berlin')
 
+
+#----------------------------- HELPER FUNCTIONS -----------------------------
+# Please write your own file reading helper functions
+# Feel free to ignore/delete the current ones
+def _helper_header_value(content: str, key: str) -> str | None:
+    """The value of the header line `<key><TAB><value>` in `content`, or None."""
+    match = re.search(rf'^{re.escape(key)}\t([^\t\r\n]*)', content, re.MULTILINE)
+    return match.group(1).strip() if match else None
+
+
+def _helper_header_start_time(content: str) -> datetime:
+    """The start of the measurement, from the header lines `Date` and `Time`,
+    in the local time of the setup."""
+    start = datetime.strptime(
+        f'{_helper_header_value(content, "Date")} {_helper_header_value(content, "Time")}',
+        '%Y-%m-%d %H:%M:%S',
+    )
+    return start.replace(tzinfo=LOCAL_TIME_ZONE)  # times always need a time zone
+
+
+
+#----------------------------- MATCHING FUNCTIONS -----------------------------
 # Please write one such function per for each filetype provided by the institution.
-def match_jv(path: str) -> tuple | bool:
-
-    with open(path, encoding='utf-8', errors='replace') as file:
-        content = file.read() # read the file content, use different decoding or delete if not needed
-
-    condition = False  # If this condition is met, we have a match. (i.e. this file is a JV file)
-
-    if(not condition): 
-        return False  # Return False for every file that is not a match.
-    
-    # extract the time, the measurement/simulation was started
-    start_time = datetime(2026, 1, 5, 10, 0, tzinfo=LOCAL_TIME_ZONE) # Replace by date extracted from file
-    
-    # extract the time, the measurement/simulation ended
-    end_time = start_time + timedelta(hours=2) # Replace by end date extracted from file, if not available, use None
-
-    # specify the provenance of the data. listed below.
-    provenance = 'measured'  # Determine
-
-    # specify the id of the sample/simulation run refering to the file. 
-    sample_id = os.path.splitext(os.path.basename(path))[0]  # file name without folder and extension, e.g. 'AI03-1A' for '.../AI03-1A.txt'; replace by sample id extracted from file
-
-    # you can provide an external reference to the sample
-    sample_reference = 'https://example.org/samples/AI03-1A' # Replace if external reference available, otherwise None
-    
-    # dict for file-type specific file contents, can stay empty for now
-    data = {}
-    return start_time, end_time, provenance, sample_id, sample_reference, data
 
 # AVAILABLE PROVANCE VALUES:
 # 'measured': 'Measured on the sample.',
@@ -51,3 +46,91 @@ def match_jv(path: str) -> tuple | bool:
 # 'reference': 'Measured on a reference device or standard rather than on the sample or studied, such as a calibration.'
 # 'other': 'From a source that none of the other values describes.',
 # 'unknown': 'Not known.',
+
+def match_jv(path: str) -> tuple | bool:
+    """One J-V sweep, e.g. `jv.txt`."""
+
+    with open(path, encoding='utf-8', errors='replace') as file:
+        content = file.read() # read the file content, use different decoding or delete if not needed
+
+    condition = _helper_header_value(content, 'Test') == 'Stability (JV)'  # If this condition is met, we have a match. (i.e. this file is a JV file)
+
+    if not condition:
+        return False  # Return False for every file that is not a match.
+
+    # extract the time, the measurement/simulation was started
+    start_time = _helper_header_start_time(content) # Replace by date extracted from file
+
+    # extract the time, the measurement/simulation ended
+    end_time = None # Replace by end date extracted from file, if not available, use None
+
+    # specify the provenance of the data listed above
+    provenance = 'measured'  # Determine
+
+    # specify the id of the sample/simulation run refering to the file. 
+    sample_id = _helper_header_value(content, 'Device') or os.path.splitext(os.path.basename(path))[0]  # file name without folder and extension, e.g. 'AI03-1A' for '.../AI03-1A.txt'; replace by sample id extracted from file
+
+    # you can provide an external reference to the sample
+    sample_reference = None # Replace if external reference available, otherwise None
+
+    # dict for file-type specific file contents, can stay empty for now
+    data = {}
+    return start_time, end_time, provenance, sample_id, sample_reference, data
+
+
+def match_mpp_tracking(path: str) -> tuple | bool:
+    """Maximum power point tracking over time, e.g. `mppt.txt`."""
+
+    with open(path, encoding='utf-8', errors='replace') as file:
+        content = file.read()
+
+    condition = (
+        _helper_header_value(content, 'Test') == 'Stability (Tracking)'
+        and _helper_header_value(content, 'Algorithm') == 'MPPT'
+    )
+
+    if not condition:
+        return False
+
+    start_time = _helper_header_start_time(content)
+
+    # the end: the start plus the hours in the first column of the last data row
+    last_row = content.strip().splitlines()[-1]
+    end_time = start_time + timedelta(hours=float(last_row.split('\t')[0]))
+
+    provenance = 'measured'
+    sample_id = (
+        _helper_header_value(content, 'Device') or os.path.splitext(os.path.basename(path))[0]
+    )
+    sample_reference = None
+    data = {}
+    return start_time, end_time, provenance, sample_id, sample_reference, data
+
+
+
+# You can execute this file as a script on sample data to check the matching works as expected. 
+if __name__ == '__main__':
+    test_files = ['jv.txt', 'mppt.txt']  # add your test files here
+
+    match_functions = [match_jv, match_mpp_tracking] #add all your match functios here
+
+    names = ('datetime', 'datetime_end', 'provenance', 'sample_id', 'sample_reference', 'data')
+
+    for file_name in test_files:
+        file_path = os.path.join(os.path.dirname(__file__), file_name)
+        print(file_name)
+        for match in match_functions:
+            result = match(file_path)
+            if result is False:
+                print(f'  {match.__name__}: no match')
+                continue
+            print(f'  {match.__name__}:')
+            for name, value in zip(names, result):
+                text = value
+                if isinstance(value, datetime):
+                    # NOMAD stores times in UTC; a time without time zone is taken as UTC
+                    if value.tzinfo is None:
+                        text = f'{value.isoformat()}  WARNING: no time zone, NOMAD takes it as UTC'
+                    else:
+                        text = f'{value.isoformat()}  (stored as {value.astimezone(timezone.utc).isoformat()})'
+                print(f'    {name:<17}{text}')
