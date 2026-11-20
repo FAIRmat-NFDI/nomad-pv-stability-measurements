@@ -1,47 +1,53 @@
-# Template for one institution. Copy to `file_reading_<INSTITUTION>.py` and add the
-# module to `INSTITUTIONS` in `__init__.py`.
-#
-# Files belong to the institution if they lie in a folder named `INSTITUTION`
-# (e.g. `HZB/run_1/jv.csv`), or else if the uploader's email domain is listed in
-# `EMAIL_DOMAINS`.
-
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+import os
 
-#: Short name, as in the module name and the upload folder.
+#: Short name of the institution
 INSTITUTION = 'TEMPLATE'
 
 #: Email domains, such as 'uni.edu'; subdomains count too.
-EMAIL_DOMAINS: tuple[str, ...] = ()
+EMAIL_DOMAINS: tuple[str, ...] = ('uni.edu',)
 
-#: Time zone of the computers that write the files, for times written without one.
+#: Time zone of the computers that write the files.
 LOCAL_TIME_ZONE = ZoneInfo('Europe/Berlin')
 
-#: Bytes from the start of a file passed as `content`.
-HEAD_SIZE = 4096
+# Please write one such function per for each filetype provided by the institution.
+def match_jv(path: str) -> tuple | bool:
 
-#: Bytes from the end of a file passed as `tail`; 0 for none.
-TAIL_SIZE = 4096
+    with open(path, encoding='utf-8', errors='replace') as file:
+        content = file.read() # read the file content, use different decoding or delete if not needed
 
-# One function per stability file type you upload, named `match_<type>`, with
-# <type> from `STABILITY_FILE_TYPES` in `schema_packages/schema_package.py`
-# (e.g. `match_jv`).
-# Functions are tried in that order; the first that does not return `False` wins.
-#
-# def match_jv(path: str, content: str, tail: str) -> tuple | bool:
-#     # path:    file path within the upload
-#     # content: beginning of the file as text; tail: end of the file as text
-#     # Return `False` if the file is not of this kind, otherwise:
-#     return start_time, end_time, provenance, sample_id, sample_reference, data
-#     # start_time: `datetime` with time zone,
-#     #     e.g. datetime(2026, 1, 5, 10, 0, tzinfo=LOCAL_TIME_ZONE)
-#     # end_time: `datetime` with time zone; `None` = same as start,
-#     #     e.g. start_time + timedelta(hours=2)
-#     # provenance: where the data comes from, one of `PROVENANCES` in
-#     #     `schema_packages/schema_package.py`: 'measured', 'simulated',
-#     #     'derived', 'imported', 'literature', 'note', 'reference' or 'other'
-#     # sample_id: text, e.g. 'AI03-1A'
-#     # sample_reference: URI text, e.g. 'https://example.org/samples/AI03-1A'
-#     # data: dict with anything else, `{}` if nothing, e.g. {'separator': ','}
-#     # Use `None` for anything unknown.
-#
-# Shared helpers, such as `file_format_from_path`, are in `file_reading_utils.py`.
+    condition = False  # If this condition is met, we have a match. (i.e. this file is a JV file)
+
+    if(not condition): 
+        return False  # Return False for every file that is not a match.
+    
+    # extract the time, the measurement/simulation was started
+    start_time = datetime(2026, 1, 5, 10, 0, tzinfo=LOCAL_TIME_ZONE) # Replace by date extracted from file
+    
+    # extract the time, the measurement/simulation ended
+    end_time = start_time + timedelta(hours=2) # Replace by end date extracted from file, if not available, use None
+
+    # specify the provenance of the data. listed below.
+    provenance = 'measured'  # Determine
+
+    # specify the id of the sample/simulation run refering to the file. 
+    sample_id = os.path.splitext(os.path.basename(path))[0]  # file name without folder and extension, e.g. 'AI03-1A' for '.../AI03-1A.txt'; replace by sample id extracted from file
+
+    # you can provide an external reference to the sample
+    sample_reference = 'https://example.org/samples/AI03-1A' # Replace if external reference available, otherwise None
+    
+    # dict for file-type specific file contents, can stay empty for now
+    data = {}
+    return start_time, end_time, provenance, sample_id, sample_reference, data
+
+# AVAILABLE PROVANCE VALUES:
+# 'measured': 'Measured on the sample.',
+# 'simulated': 'Computed by a model of the sample.',
+# 'derived': 'Computed from other data, such as figures of merit fitted to measured curves.'
+# 'imported': 'Taken from another source, such as a database.',
+# 'literature': 'Taken from a publication.',
+# 'note': 'Written by hand, such as lab notes or values typed in.',
+# 'reference': 'Measured on a reference device or standard rather than on the sample or studied, such as a calibration.'
+# 'other': 'From a source that none of the other values describes.',
+# 'unknown': 'Not known.',

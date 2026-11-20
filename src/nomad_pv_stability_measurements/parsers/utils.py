@@ -1,9 +1,11 @@
 """Helpers of the parser that do not depend on what a file holds: which files of an
-upload are registered, reading the beginning and end of a file, and finding the
-institution and the uploader of a file."""
+upload are registered, where a file lies on disk, and finding the institution and the uploader of a file."""
 
-import os
-from pathlib import PurePosixPath
+import shutil
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 from nomad_pv_stability_measurements.file_reading import INSTITUTIONS
@@ -17,18 +19,9 @@ from nomad_pv_stability_measurements.parsers.project_data_utils import (
 
 if TYPE_CHECKING:
     from types import ModuleType
-    from typing import BinaryIO
 
     from nomad.datamodel.datamodel import EntryArchive
     from structlog.stdlib import BoundLogger
-
-#: How many bytes of the beginning of a file the `match_<kind>` functions see, for
-#: an institution whose module sets no `HEAD_SIZE` of its own.
-HEAD_SIZE = 4096
-
-#: How many bytes of the end of a file the `match_<kind>` functions see, for an
-#: institution whose module sets no `TAIL_SIZE` of its own.
-TAIL_SIZE = 4096
 
 #: The endings of NOMAD archive files, such as ELN entries and the project entry.
 #: These are processed by NOMAD itself and not registered.
@@ -48,26 +41,24 @@ def is_registered(path: str) -> bool:
     return not path.endswith(ARCHIVE_FILE_ENDINGS)
 
 
-def read_head(file: 'BinaryIO', size: int = HEAD_SIZE) -> str:
-    """The first `size` bytes of `file`, opened in binary mode, as text.
+@contextmanager
+def raw_file_on_disk(upload_files, path: str) -> Iterator[str]:
+    """Where the file at `path`, a path within the upload, lies on disk, for the
+    `match_<kind>` functions, which read files by their path.
 
-    Decoded as UTF-8: before parsing, NOMAD rewrites text files that it recognizes as
-    Latin-1 in UTF-8. Bytes that are not UTF-8, as in binary files, become `�`
-    instead of an error, so such a file gives text that no `match_<kind>` function
-    recognizes."""
-    return file.read(size).decode('utf-8', errors='replace')
-
-
-def read_tail(file: 'BinaryIO', size: int = TAIL_SIZE) -> str:
-    """The last `size` bytes of `file`, opened in binary mode, as text, decoded like
-    `read_head`; empty for `size` 0. If head and tail together are longer than the
-    file, they overlap; for a file shorter than `size`, the tail is the whole file.
-    The tail may begin within a line."""
-    if size == 0:
-        return ''
-    file.seek(0, os.SEEK_END)
-    file.seek(max(0, file.tell() - size))
-    return file.read().decode('utf-8', errors='replace')
+    A staging upload keeps its files on disk. A published upload keeps them in a zip
+    file, so the file is copied to a temporary file, which is removed afterwards and
+    whose name ends with the file's path within the upload."""
+    raw_file_object = getattr(upload_files, 'raw_file_object', None)
+    if raw_file_object is not None:
+        yield raw_file_object(path).os_path
+        return
+    with tempfile.TemporaryDirectory() as folder:
+        os_path = Path(folder, path)
+        os_path.parent.mkdir(parents=True, exist_ok=True)
+        with upload_files.raw_file(path, 'rb') as source, open(os_path, 'wb') as copy:
+            shutil.copyfileobj(source, copy)
+        yield str(os_path)
 
 
 def institution_of(path: str, email: str | None = None) -> 'ModuleType | None':

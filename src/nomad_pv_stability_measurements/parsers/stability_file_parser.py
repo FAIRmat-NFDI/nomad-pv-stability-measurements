@@ -20,12 +20,8 @@ from nomad_pv_stability_measurements.parsers.project_data_utils import (
     sample_entry_reference,
 )
 from nomad_pv_stability_measurements.parsers.utils import (
-    HEAD_SIZE,
-    TAIL_SIZE,
     DescribedFileLogger,
     institution_of,
-    read_head,
-    read_tail,
     uploader_email,
 )
 from nomad_pv_stability_measurements.schema_packages.schema_package import (
@@ -38,22 +34,18 @@ from nomad_pv_stability_measurements.schema_packages.utils import (
 )
 
 if TYPE_CHECKING:
-    from typing import BinaryIO
-
     from nomad.datamodel.datamodel import EntryArchive
     from structlog.stdlib import BoundLogger
 
 
 def register_file(
     path: str,
-    content: str,
-    tail: str,
+    os_path: str,
     logger: 'BoundLogger',
     email: str | None = None,
 ) -> tuple[dict, dict]:
-    """What is known about the file at `path`, a path within the upload, whose
-    beginning is `content` and whose end is `tail`, uploaded by the user with the
-    address `email`.
+    """What is known about the file at `path`, a path within the upload, which lies
+    at `os_path` on disk, uploaded by the user with the address `email`.
 
     Returns two values:
 
@@ -63,7 +55,8 @@ def register_file(
     The institution is given by `institution_of`: by the file's folder, or else by
     the domain of `email`, which is logged.
 
-    The institution's `match_<kind>` functions are asked in the order of
+    The institution's `match_<kind>` functions get `os_path` and read the file
+    themselves. They are asked in the order of
     `STABILITY_FILE_TYPES`, and the first that recognizes the file, by not returning
     `False`, decides. A function that fails is logged as a warning and treated as not
     recognizing the file. A file whose function gives no end time ends when it
@@ -99,7 +92,7 @@ def register_file(
         if match is None:
             continue
         try:
-            result = match(path, content, tail)
+            result = match(os_path)
         except Exception as error:
             logger.warning(
                 'match function failed',
@@ -159,29 +152,25 @@ def with_project_data(
 
 def file_values(
     path: str,
-    file: 'BinaryIO',
+    os_path: str,
     logger: 'BoundLogger',
     email: str | None = None,
     spreadsheet: 'Spreadsheet | None' = None,
 ) -> tuple[dict, dict]:
     """The values of the `StabilityActivity` of the file at `path`, a path within the
-    upload, whose content `file` gives, uploaded by the user with the address
+    upload, which lies at `os_path` on disk, uploaded by the user with the address
     `email`: found by `register_file` and completed by the project data
     `spreadsheet` with `with_project_data`; and the `data` that the institution's
     `match_<kind>` function returned.
 
-    The institution's module sets how much of the beginning and end of the file its
-    functions see. Problems of a file that the spreadsheet describes are logged as
+    Problems of a file that the spreadsheet describes are logged as
     information, because the spreadsheet gives its values."""
-    institution = institution_of(path, email)
-    content = read_head(file, getattr(institution, 'HEAD_SIZE', HEAD_SIZE))
-    tail = read_tail(file, getattr(institution, 'TAIL_SIZE', TAIL_SIZE))
     described = {}
     if spreadsheet is not None:
         described = described_values(path, spreadsheet.file_rows)
     if described:
         logger = DescribedFileLogger(logger)
-    values, data = register_file(path, content, tail, logger, email)
+    values, data = register_file(path, os_path, logger, email)
     if spreadsheet is not None:
         values = with_project_data(values, described, spreadsheet)
     return values, data
@@ -230,8 +219,7 @@ class StabilityFileParser(MatchingParser):
 
         email = uploader_email(archive)
         spreadsheet = load_spreadsheet(archive.m_context)
-        with open(mainfile, 'rb') as file:
-            values, data = file_values(path, file, logger, email, spreadsheet)
+        values, data = file_values(path, mainfile, logger, email, spreadsheet)
         archive.data = stability_activity(values, data)
 
         ensure_project_data(archive, logger)

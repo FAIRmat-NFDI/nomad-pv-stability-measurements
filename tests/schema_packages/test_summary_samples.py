@@ -70,7 +70,15 @@ def test_summary_keeps_each_files_own_sample_reference(staging_upload, monkeypat
     monkeypatch.setattr(
         file_reading_UNITOV,
         'match_jv',
-        lambda path, content, tail: (None, None, None, 'A1', file_references[path], {}),
+        # `path` is where the file lies on disk, ending with its path in the upload.
+        lambda path: (
+            None,
+            None,
+            None,
+            'A1',
+            next(ref for name, ref in file_references.items() if path.endswith(name)),
+            {},
+        ),
     )
     summary = ProjectData()
     normalize(

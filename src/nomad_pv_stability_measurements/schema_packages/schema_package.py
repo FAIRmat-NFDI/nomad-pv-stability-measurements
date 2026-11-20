@@ -236,6 +236,7 @@ class StabilityActivity(Activity):
         """,
     )
 
+
     stability_file_type = Quantity(
         type=MEnum(*STABILITY_FILE_TYPES),
         default='unknown',
@@ -686,6 +687,7 @@ class ProjectData(PlotSection, EntryData, TableData):
         from nomad_pv_stability_measurements.parsers.utils import (
             institution_of,
             is_registered,
+            raw_file_on_disk,
             uploader_email,
         )
 
@@ -711,8 +713,8 @@ class ProjectData(PlotSection, EntryData, TableData):
         entries = {}
         for path in paths:
             try:
-                with upload_files.raw_file(path, 'rb') as file:
-                    values, data = file_values(path, file, QUIET, email, spreadsheet)
+                with raw_file_on_disk(upload_files, path) as os_path:
+                    values, data = file_values(path, os_path, QUIET, email, spreadsheet)
                 entries[path] = stability_activity(values, data)
             except Exception as error:
                 logger.warning('could not read a file', file=path, exc_info=error)
