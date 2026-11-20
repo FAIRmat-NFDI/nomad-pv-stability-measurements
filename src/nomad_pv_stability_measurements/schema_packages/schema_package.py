@@ -206,19 +206,18 @@ class StabilityActivity(Activity):
     nothing could determine stay empty.
 
     As an activity, it stands for whatever produced the file's data, measured,
-    simulated or from elsewhere: `datetime` and `datetime_end` are the period the
+    simulated or from elsewhere: `datetime` and `end_time` are the period the
     data cover. Its `name`, which also names the entry, is the file's path in the
     upload; its `lab_id`, unique in NOMAD, is `<proposal_number>:<path>`, or
     `<upload_id>:<path>` without a proposal number; its `method`, by which NOMAD's
     apps find it, is its `stability_file_type`; its `description` comes from the
-    sheet `files`. The activity's `location` and `steps` are not used. Its workflow
+    sheet `files`; its `location` is the institution of the file. The activity's
+    `steps` are not used. Its workflow
     has the file as output and the sample entry, where known, as input.
     """
 
     m_def = Section(
-        a_display=SectionDisplayAnnotation(
-            visible=Filter(exclude=['location', 'steps', 'method'])
-        )
+        a_display=SectionDisplayAnnotation(visible=Filter(exclude=['steps', 'method']))
     )
 
     file = SubSection(
@@ -226,16 +225,17 @@ class StabilityActivity(Activity):
         description='The file that holds the data, the output of the activity.',
     )
 
-    institution = Quantity(
+    location = Quantity(
         type=str,
         description="""
         Short name of the institution whose folder of the upload the file is in, or,
         for a file in no institution's folder, the institution of the uploader's
         email domain. Its reading code determines the values that the project data
-        does not give. Empty if neither names an institution.
+        does not give. For data taken from elsewhere, such as from a database or a
+        publication, the institution that registered them rather than where they
+        were made. Empty if neither names an institution.
         """,
     )
-
 
     stability_file_type = Quantity(
         type=MEnum(*STABILITY_FILE_TYPES),
@@ -262,7 +262,7 @@ class StabilityActivity(Activity):
         """,
     )
 
-    datetime_end = Quantity(
+    end_time = Quantity(
         type=Datetime,
         description="""
         The end of the period that the file's data cover, as an absolute time, with
@@ -290,7 +290,7 @@ class StabilityActivity(Activity):
         unit='hour',
         description="""
         How long a period the file's data cover. With a `datetime`, derived on
-        normalization from `datetime` to `datetime_end`, zero without an end. Without
+        normalization from `datetime` to `end_time`, zero without an end. Without
         a `datetime`, as given, e.g. in the sheet `files`: for a simulation over
         1000 h of model time, 1000; empty if nothing gives it.
         """,
@@ -314,7 +314,7 @@ class StabilityActivity(Activity):
             archive.results = Results()
         super().normalize(archive, logger)
         if self.datetime is not None:
-            end = self.datetime_end or self.datetime
+            end = self.end_time or self.datetime
             self.duration = (end - self.datetime).total_seconds() / 3600
 
         if path is not None:

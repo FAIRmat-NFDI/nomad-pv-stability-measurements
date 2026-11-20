@@ -119,7 +119,7 @@ if __name__ == '__main__':
 
     match_functions = [match_jv, match_mpp_tracking] #add all your match functios here
 
-    names = ('datetime', 'datetime_end', 'provenance', 'sample_id', 'sample_reference', 'data')
+    names = ('datetime', 'end_time', 'provenance', 'sample_id', 'sample_reference', 'data')
 
     for file_name in test_files:
         file_path = os.path.join(os.path.dirname(__file__), file_name)

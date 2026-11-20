@@ -125,7 +125,7 @@ FILE_COLUMNS = (
     'files',
     'stability_file_type',
     'datetime',
-    'datetime_end',
+    'end_time',
     'duration',
     'provenance',
     'sample_id',

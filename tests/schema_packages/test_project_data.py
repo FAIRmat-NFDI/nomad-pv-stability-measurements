@@ -519,7 +519,7 @@ def test_file_entries_take_the_project_data_first(staging_upload, tmp_path):
     # A file that no reading code recognizes is described completely.
     simulated = entries['HZB/simulation/jv.csv']
     assert (simulated.stability_file_type, simulated.provenance) == ('jv', 'simulated')
-    assert simulated.datetime_end == simulated.datetime
+    assert simulated.end_time == simulated.datetime
     assert simulated.description == 'Drift-diffusion simulation of the fresh cell.'
 
     assert project.proposal == PROJECT['proposal']

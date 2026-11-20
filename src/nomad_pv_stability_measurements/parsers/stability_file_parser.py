@@ -86,7 +86,7 @@ def register_file(
             institution=institution.INSTITUTION,
         )
 
-    values['institution'] = institution.INSTITUTION
+    values['location'] = institution.INSTITUTION
     for kind in STABILITY_FILE_TYPES:
         match = getattr(institution, f'match_{kind}', None)
         if match is None:
@@ -108,7 +108,7 @@ def register_file(
         found = {
             'stability_file_type': kind,
             'datetime': start_time,
-            'datetime_end': start_time if end_time is None else end_time,
+            'end_time': start_time if end_time is None else end_time,
             'provenance': provenance,
             'sample_id': clean_sample_id(sample_id),
             'sample_reference': sample_reference,
@@ -135,12 +135,12 @@ def with_project_data(
 
     If the descriptions give a start but no end, and matching gave no end of its
     own, the file's data end when they start, as for matching."""
-    end_was_start = values.get('datetime_end') == values.get('datetime')
+    end_was_start = values.get('end_time') == values.get('datetime')
     values = {**values, **described}
-    if 'datetime_end' not in described and end_was_start:
-        values.pop('datetime_end', None)
+    if 'end_time' not in described and end_was_start:
+        values.pop('end_time', None)
         if values.get('datetime') is not None:
-            values['datetime_end'] = values['datetime']
+            values['end_time'] = values['datetime']
     if values.get('sample_id') is None:
         values.pop('sample_id', None)
     elif values['sample_id'] in spreadsheet.sample_ids:

@@ -55,14 +55,14 @@ TIMELINE_END_SYMBOL = 'triangle-up'
 
 #: The legend entries that explain the start and end markers.
 TIMELINE_START_LEGEND = 'start (datetime)'
-TIMELINE_END_LEGEND = 'end (datetime_end)'
+TIMELINE_END_LEGEND = 'end (end_time)'
 
 #: The hover text of a file's markers.
 TIMELINE_HOVER = (
     '<b>%{customdata[0]}</b><br>'
     'series: %{customdata[1]}<br>'
     'datetime: %{customdata[2]}<br>'
-    'datetime_end: %{customdata[3]}<br>'
+    'end_time: %{customdata[3]}<br>'
     # `<extra></extra>` leaves out the box with the trace's name.
     'type: %{customdata[4]}<extra></extra>'
 )
@@ -144,7 +144,7 @@ def file_timeline(
         start_points, end_points = [], []
         for row, series_name, path, entry in files_by_kind[kind]:
             start = local(entry.datetime)
-            end = local(entry.datetime_end or entry.datetime)
+            end = local(entry.end_time or entry.datetime)
             text = (
                 PurePosixPath(path).name,
                 series_name,
@@ -287,7 +287,7 @@ def timeline_time_zone(entries) -> tzinfo:
     as for institutions in different zones or without one."""
     modules = {module.INSTITUTION: module for module in INSTITUTIONS}
     zones = {
-        getattr(modules.get(entry.institution), 'LOCAL_TIME_ZONE', None)
+        getattr(modules.get(entry.location), 'LOCAL_TIME_ZONE', None)
         for entry in entries
     }
     if len(zones) == 1 and None not in zones:

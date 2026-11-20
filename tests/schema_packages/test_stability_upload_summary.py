@@ -111,7 +111,7 @@ def test_summary_names_every_institution_of_the_upload(staging_upload):
     )
 
     assert summary.institutions == ['HZB', 'UNITOV']
-    assert [activity.institution for activity in activities(summary)] == [
+    assert [activity.location for activity in activities(summary)] == [
         'HZB',
         'UNITOV',
         None,
@@ -130,7 +130,7 @@ def test_summary_names_the_uploaders_institution_for_files_in_no_folder(
     )
 
     assert summary.institutions == ['HZB', 'UNITOV']
-    assert [activity.institution for activity in activities(summary)] == [
+    assert [activity.location for activity in activities(summary)] == [
         'HZB',
         'UNITOV',
     ]

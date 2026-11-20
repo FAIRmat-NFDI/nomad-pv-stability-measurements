@@ -48,7 +48,7 @@ def test_UNITOV_file_is_registered_with_kind_sample_and_start(tmp_path):
     assert not [log for log in logs if log['log_level'] in ('warning', 'error')]
 
     assert data.file.path == 'UNITOV/run_1/001_JV.txt'
-    assert data.institution == 'UNITOV'
+    assert data.location == 'UNITOV'
     assert data.stability_file_type == 'jv'
     assert data.file.file_format == 'txt'
     assert data.provenance == 'measured'
@@ -75,7 +75,7 @@ def test_UNITOV_series_are_told_apart(tmp_path, test, algorithm, kind):
 
     assert data.stability_file_type == kind
     # Each series ends at its last row, half an hour after its start.
-    assert data.datetime_end == datetime(2023, 10, 19, 17, 4, 18, tzinfo=timezone.utc)
+    assert data.end_time == datetime(2023, 10, 19, 17, 4, 18, tzinfo=timezone.utc)
 
 
 #: A UNITOV MPP tracking file of two hours, started at 18:34:18 in Rome. Long enough
@@ -99,10 +99,8 @@ def test_UNITOV_file_ends_at_its_last_row_or_else_when_it_starts(tmp_path):
 
     assert tracked.stability_file_type == 'mpp_tracking'
     # Two hours after the start at 18:34:18 in Rome.
-    assert tracked.datetime_end == datetime(
-        2023, 10, 19, 18, 34, 18, tzinfo=timezone.utc
-    )
-    assert swept.datetime_end == swept.datetime
+    assert tracked.end_time == datetime(2023, 10, 19, 18, 34, 18, tzinfo=timezone.utc)
+    assert swept.end_time == swept.datetime
 
 
 def test_institution_without_tail_gets_no_end_from_the_last_row(tmp_path, monkeypatch):
@@ -111,7 +109,7 @@ def test_institution_without_tail_gets_no_end_from_the_last_row(tmp_path, monkey
     tracked = parse(tmp_path, tracking_path, UNITOV_LONG_TRACKING.encode()).data
 
     assert tracked.stability_file_type == 'mpp_tracking'
-    assert tracked.datetime_end == tracked.datetime
+    assert tracked.end_time == tracked.datetime
 
 
 def test_utf8_header_text_is_kept(tmp_path):
@@ -161,7 +159,7 @@ def test_file_in_no_institution_folder_belongs_to_the_uploaders_institution(
 ):
     data = parse(tmp_path, path, UNITOV_JV.encode(), email).data
 
-    assert data.institution == institution
+    assert data.location == institution
     assert data.stability_file_type == kind
 
 
@@ -208,9 +206,7 @@ def test_file_entry_knows_how_long_a_period_its_data_cover(
         StabilityActivity,
     )
 
-    entry = StabilityActivity(
-        datetime=start_time, datetime_end=end_time, duration=given
-    )
+    entry = StabilityActivity(datetime=start_time, end_time=end_time, duration=given)
     archive = EntryArchive(metadata=EntryMetadata(mainfile='data.csv'), data=entry)
     entry.normalize(archive, utils.get_logger(__name__))
 

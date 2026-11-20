@@ -227,7 +227,7 @@ def test_summary_plots_each_file_from_start_to_end_in_its_sample_row(
         if trace['name'] == 'mpp_tracking' and 'customdata' in trace
     )
     hover = tracking['hovertemplate']
-    for index, label in enumerate(['series', 'datetime', 'datetime_end', 'type']):
+    for index, label in enumerate(['series', 'datetime', 'end_time', 'type']):
         assert f'{label}: %{{customdata[{index + 1}]}}' in hover
     assert hover.endswith('<extra></extra>')
     assert list(tracking['customdata'][0]) == [
