@@ -34,7 +34,17 @@ def _helper_header_start_time(content: str) -> datetime:
 
 
 #----------------------------- MATCHING FUNCTIONS -----------------------------
-# Please write one such function per for each filetype provided by the institution.
+# Please write one such function for each filetype provided by the institution.
+# The functions should return False for every file that is not a match, and a tuple of
+# (start_time, end_time, provenance, sample_id, sample_reference, data) for
+# every file that is a match. return values should be as follows:
+
+# start_time: Absolute start time of the measurement, as a datetime with time zone. 
+# end_time: Absolute end time of the measurement, as a datetime with time zone. If not known, return None.
+# provenance: One of the available provenance values (see below).
+# sample_id: The id of the sample/simulation run refering to the file.
+# sample_reference: An external reference to the sample, if available.
+# data: A dictionary for file-type specific file contents, can stay empty for now.
 
 # AVAILABLE PROVANCE VALUES:
 # 'measured': 'Measured on the sample.',
@@ -47,37 +57,32 @@ def _helper_header_start_time(content: str) -> datetime:
 # 'other': 'From a source that none of the other values describes.',
 # 'unknown': 'Not known.',
 
+#Exemplary JV matching function.
 def match_jv(path: str) -> tuple | bool:
     """One J-V sweep, e.g. `jv.txt`."""
 
     with open(path, encoding='utf-8', errors='replace') as file:
-        content = file.read() # read the file content, use different decoding or delete if not needed
+        content = file.read() 
 
     condition = _helper_header_value(content, 'Test') == 'Stability (JV)'  # If this condition is met, we have a match. (i.e. this file is a JV file)
 
     if not condition:
         return False  # Return False for every file that is not a match.
 
-    # extract the time, the measurement/simulation was started
-    start_time = _helper_header_start_time(content) # Replace by date extracted from file
+    start_time = _helper_header_start_time(content) 
 
-    # extract the time, the measurement/simulation ended
-    end_time = None # Replace by end date extracted from file, if not available, use None
+    end_time = None
 
-    # specify the provenance of the data listed above
     provenance = 'measured'  # Determine
 
-    # specify the id of the sample/simulation run refering to the file. 
-    sample_id = _helper_header_value(content, 'Device') or os.path.splitext(os.path.basename(path))[0]  # file name without folder and extension, e.g. 'AI03-1A' for '.../AI03-1A.txt'; replace by sample id extracted from file
+    sample_id = _helper_header_value(content, 'Device') or os.path.splitext(os.path.basename(path))[0]  
 
-    # you can provide an external reference to the sample
-    sample_reference = None # Replace if external reference available, otherwise None
+    sample_reference = None 
 
-    # dict for file-type specific file contents, can stay empty for now
     data = {}
     return start_time, end_time, provenance, sample_id, sample_reference, data
 
-
+#Exemplary MPPT matching function.
 def match_mpp_tracking(path: str) -> tuple | bool:
     """Maximum power point tracking over time, e.g. `mppt.txt`."""
 
@@ -108,7 +113,7 @@ def match_mpp_tracking(path: str) -> tuple | bool:
 
 
 
-# You can execute this file as a script on sample data to check the matching works as expected. 
+# You can execute this file as a script on sample data located in the same folder to check the matching works as expected. 
 if __name__ == '__main__':
     test_files = ['jv.txt', 'mppt.txt']  # add your test files here
 
