@@ -8,11 +8,11 @@ from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
-from nomad_pv_stability_measurements.file_reading import INSTITUTIONS
-from nomad_pv_stability_measurements.file_reading.file_reading_utils import (
+from nomad_ready_pv.file_reading import INSTITUTIONS
+from nomad_ready_pv.file_reading.file_reading_utils import (
     is_in_institution_folder,
 )
-from nomad_pv_stability_measurements.parsers.project_data_utils import (
+from nomad_ready_pv.parsers.project_data_utils import (
     PROJECT_DATA_FILE,
     TEMPLATE_FILE,
 )

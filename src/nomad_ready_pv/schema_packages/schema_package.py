@@ -39,13 +39,13 @@ from nomad.parsing.tabular import TableData
 from nomad.utils import generate_entry_id
 from nomad_pv_stability_standards.schema_packages.standard import AppliedStandard
 
-from nomad_pv_stability_measurements.schema_packages.plotting_utils import (
+from nomad_ready_pv.schema_packages.plotting_utils import (
     file_timeline,
 )
-from nomad_pv_stability_measurements.schema_packages.sample_schema import (
+from nomad_ready_pv.schema_packages.sample_schema import (
     SolarCellSample,
 )
-from nomad_pv_stability_measurements.schema_packages.utils import (
+from nomad_ready_pv.schema_packages.utils import (
     GENERAL_GROUP,
     QUIET,
     UNKNOWN_SAMPLE,
@@ -625,7 +625,7 @@ class ProjectData(PlotSection, EntryData, TableData):
         else the uploader's email domain, and the timeline. A file of no general kind
         without sample, or that cannot be read, is in the series `UNKNOWN_SAMPLE`."""
         # Imported here, because the module imports this one.
-        from nomad_pv_stability_measurements.parsers.project_data_utils import (
+        from nomad_ready_pv.parsers.project_data_utils import (
             PROJECT_DATA_FILE,
             file_rows,
             project_references,
@@ -692,13 +692,13 @@ class ProjectData(PlotSection, EntryData, TableData):
         entries are processed yet. Problems of single files are reported by their
         entries, not here."""
         # Imported here, because these modules import this one.
-        from nomad_pv_stability_measurements.parsers.project_data_utils import (
+        from nomad_ready_pv.parsers.project_data_utils import (
             load_spreadsheet,
         )
-        from nomad_pv_stability_measurements.parsers.stability_file_parser import (
+        from nomad_ready_pv.parsers.stability_file_parser import (
             file_values,
         )
-        from nomad_pv_stability_measurements.parsers.utils import (
+        from nomad_ready_pv.parsers.utils import (
             institution_of,
             is_registered,
             raw_file_on_disk,

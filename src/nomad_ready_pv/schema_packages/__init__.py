@@ -3,7 +3,7 @@ from nomad.config.models.plugins import SchemaPackageEntryPoint
 
 class StabilitySchemaPackageEntryPoint(SchemaPackageEntryPoint):
     def load(self):
-        from nomad_pv_stability_measurements.schema_packages.schema_package import (
+        from nomad_ready_pv.schema_packages.schema_package import (
             m_package,
         )
 
@@ -21,7 +21,7 @@ schema_package_entry_point = StabilitySchemaPackageEntryPoint(
 
 class SampleSchemaEntryPoint(SchemaPackageEntryPoint):
     def load(self):
-        from nomad_pv_stability_measurements.schema_packages.sample_schema import (
+        from nomad_ready_pv.schema_packages.sample_schema import (
             m_package,
         )
 

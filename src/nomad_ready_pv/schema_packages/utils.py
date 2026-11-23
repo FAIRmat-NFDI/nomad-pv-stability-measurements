@@ -15,7 +15,7 @@ from nomad_pv_stability_standards.schema_packages.standard import AppliedStandar
 if TYPE_CHECKING:
     from structlog.stdlib import BoundLogger
 
-    from nomad_pv_stability_measurements.schema_packages.schema_package import (
+    from nomad_ready_pv.schema_packages.schema_package import (
         StabilityActivity,
         StabilityActivityGroup,
     )
@@ -88,7 +88,7 @@ QUIET = QuietLogger()
 def files_app_url(upload_id: str) -> str:
     """The address of the app "Stability files" in NOMAD's new GUI, filtered to the
     files of the upload `upload_id`."""
-    from nomad_pv_stability_measurements.apps.stability_files import (
+    from nomad_ready_pv.apps.stability_files import (
         stability_files_app,
     )
 
@@ -202,7 +202,7 @@ def stability_activity(values: dict, data: dict | None = None) -> 'StabilityActi
     beyond these values. It is not stored yet; it is passed here so that the entry
     can become a section of its own kind that holds it, chosen here alone, without
     changes to the parser or to the institutions' reading code."""
-    from nomad_pv_stability_measurements.schema_packages.schema_package import (
+    from nomad_ready_pv.schema_packages.schema_package import (
         SampleIdentity,
         StabilityActivity,
         StabilityFile,
@@ -232,10 +232,10 @@ def stability_activity(values: dict, data: dict | None = None) -> 'StabilityActi
 def sample_series(sample_id: str, sample_ids: frozenset) -> 'StabilityActivityGroup':
     """The series of the sample `sample_id`, referencing its sample entry if the
     sheet `samples` (`sample_ids`) has it."""
-    from nomad_pv_stability_measurements.parsers.project_data_utils import (
+    from nomad_ready_pv.parsers.project_data_utils import (
         sample_entry_reference,
     )
-    from nomad_pv_stability_measurements.schema_packages.schema_package import (
+    from nomad_ready_pv.schema_packages.schema_package import (
         SampleIdentity,
         StabilityActivityGroup,
     )

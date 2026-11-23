@@ -2,7 +2,7 @@ import pytest
 from nomad.datamodel.metainfo.plot import PlotlyFigure
 from test_stability_upload_summary import normalize
 
-from nomad_pv_stability_measurements.schema_packages.schema_package import (
+from nomad_ready_pv.schema_packages.schema_package import (
     ProjectData,
     StabilityActivityGroup,
 )
@@ -59,7 +59,7 @@ def test_summary_groups_the_files_by_sample_in_measurement_order(staging_upload)
 
 
 def test_summary_keeps_each_files_own_sample_reference(staging_upload, monkeypatch):
-    from nomad_pv_stability_measurements.file_reading import file_reading_UNITOV
+    from nomad_ready_pv.file_reading import file_reading_UNITOV
 
     reference = 'https://example.org/samples/A1'
     file_references = {

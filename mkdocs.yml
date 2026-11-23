@@ -1,8 +1,8 @@
-site_name: nomad-pv-stability-measurements
+site_name: nomad-ready-pv
 site_description: data schemas for indoor and outdoor PV stability measurements with and without standardized protocols
 site_author: Simon Ternes
 
-repo_url: https://github.com/FAIRmat-NFDI/nomad-pv-stability-measurements
+repo_url: https://github.com/FAIRmat-NFDI/nomad-ready-pv
 edit_uri: ""
 
 nav:

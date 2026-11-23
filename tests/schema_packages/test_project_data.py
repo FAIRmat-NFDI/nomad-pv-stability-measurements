@@ -5,8 +5,8 @@ import openpyxl
 import pytest
 from structlog.testing import capture_logs
 
-import nomad_pv_stability_measurements
-from nomad_pv_stability_measurements.parsers.project_data_utils import (
+import nomad_ready_pv
+from nomad_ready_pv.parsers.project_data_utils import (
     write_project_data_template,
 )
 
@@ -59,7 +59,7 @@ def process(upload, spreadsheet_path, files: dict[str, str]):
     then those. Returns the project entry."""
     import json
 
-    from nomad_pv_stability_measurements.schema_packages.schema_package import (
+    from nomad_ready_pv.schema_packages.schema_package import (
         ProjectData,
     )
 
@@ -530,9 +530,7 @@ def test_the_template_reads_without_errors(staging_upload, tmp_path):
     assert [log for log in logs if log['log_level'] in ('warning', 'error')] == []
 
 
-EXAMPLE_UPLOADS = (
-    Path(nomad_pv_stability_measurements.__file__).parent / 'example_uploads'
-)
+EXAMPLE_UPLOADS = Path(nomad_ready_pv.__file__).parent / 'example_uploads'
 
 
 def headers(path) -> dict[str, list]:

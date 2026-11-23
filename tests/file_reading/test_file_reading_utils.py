@@ -1,11 +1,11 @@
 import pytest
 
-from nomad_pv_stability_measurements.file_reading.file_reading_utils import (
+from nomad_ready_pv.file_reading.file_reading_utils import (
     FORMAT_BY_EXTENSION,
     file_format_from_path,
     is_in_institution_folder,
 )
-from nomad_pv_stability_measurements.schema_packages.schema_package import (
+from nomad_ready_pv.schema_packages.schema_package import (
     StabilityFile,
 )
 

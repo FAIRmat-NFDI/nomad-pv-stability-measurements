@@ -7,7 +7,7 @@ from nomad.datamodel import EntryArchive, EntryMetadata
 from nomad.datamodel.context import ServerContext
 from nomad.files import StagingUploadFiles
 
-from nomad_pv_stability_measurements.parsers.stability_file_parser import (
+from nomad_ready_pv.parsers.stability_file_parser import (
     StabilityFileParser,
 )
 

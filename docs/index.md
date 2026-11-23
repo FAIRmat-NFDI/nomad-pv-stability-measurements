@@ -1,4 +1,4 @@
-# Welcome to the `nomad-pv-stability-measurements` documentation
+# Welcome to the `nomad-ready-pv` documentation
 
 data schemas for indoor and outdoor PV stability measurements with and without standardized protocols
 

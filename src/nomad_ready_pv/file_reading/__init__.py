@@ -12,7 +12,7 @@ looked for.
 
 from types import ModuleType
 
-from nomad_pv_stability_measurements.file_reading import (
+from nomad_ready_pv.file_reading import (
     file_reading_HZB,
     file_reading_UNITOV,
 )

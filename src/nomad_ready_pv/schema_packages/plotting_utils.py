@@ -6,7 +6,7 @@ from pathlib import PurePosixPath
 
 from nomad.datamodel.metainfo.plot import PlotlyFigure
 
-from nomad_pv_stability_measurements.file_reading import INSTITUTIONS
+from nomad_ready_pv.file_reading import INSTITUTIONS
 
 #: Sizes in the timeline of the files, in pixels: of the circle at a file's start,
 #: of the smaller triangle at its end, which hides behind the circle when zoomed
@@ -99,7 +99,7 @@ def file_timeline(
     from plotly.colors import hex_to_rgb
 
     # Imported here, because the schema package imports this module.
-    from nomad_pv_stability_measurements.schema_packages.schema_package import (
+    from nomad_ready_pv.schema_packages.schema_package import (
         DATA_TYPES,
     )
 

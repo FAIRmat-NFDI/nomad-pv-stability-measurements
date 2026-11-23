@@ -1,4 +1,4 @@
-# nomad-pv-stability-measurements
+# nomad-ready-pv
 
 data schemas for indoor and outdoor PV stability measurements with and without standardized protocols
 
@@ -8,8 +8,8 @@ This `nomad` plugin was generated with `Cookiecutter` along with `@nomad`'s [`co
 
 If you want to develop locally this plugin, clone the project and in the plugin folder, create a virtual environment (you can use Python 3.10, 3.11 or 3.12):
 ```sh
-git clone https://github.com/FAIRmat-NFDI/nomad-pv-stability-measurements.git
-cd nomad-pv-stability-measurements
+git clone https://github.com/FAIRmat-NFDI/nomad-ready-pv.git
+cd nomad-ready-pv
 python3.11 -m venv .pyenv
 . .pyenv/bin/activate
 ```
@@ -109,7 +109,7 @@ Read the [NOMAD plugin documentation](https://nomad-lab.eu/prod/v1/staging/docs/
 We now recommend using the dedicated [`nomad-distro-dev`](https://github.com/FAIRmat-NFDI/nomad-distro-dev) repository to simplify the process. Please refer to that repository for detailed instructions.
 
 ## Publish note
-In the [GitHub actions workflow](./.github/workflows/publish.yml) for publishing the nomad-pv-stability-measurements plugin to PyPI, we commented out the `deploy` job . If you want to publish the plugin to `PyPI`, you need to set up your project in `PyPI`. There are several online tutorials on publishing a Python package to PyPI, e.g., [How to Publish a Python Package to PyPI](https://realpython.com/pypi-publish-python-package/). After that, you can uncomment the `deploy` job in the workflow file and push the changes to GitHub. The workflow will be triggered and the package will be published to `PyPI` when you create a new release on GitHub.
+In the [GitHub actions workflow](./.github/workflows/publish.yml) for publishing the nomad-ready-pv plugin to PyPI, we commented out the `deploy` job . If you want to publish the plugin to `PyPI`, you need to set up your project in `PyPI`. There are several online tutorials on publishing a Python package to PyPI, e.g., [How to Publish a Python Package to PyPI](https://realpython.com/pypi-publish-python-package/). After that, you can uncomment the `deploy` job in the workflow file and push the changes to GitHub. The workflow will be triggered and the package will be published to `PyPI` when you create a new release on GitHub.
 
 ### Template update
 

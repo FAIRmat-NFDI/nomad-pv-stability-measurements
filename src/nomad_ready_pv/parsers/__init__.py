@@ -3,7 +3,7 @@ from nomad.config.models.plugins import ParserEntryPoint
 
 class StabilityFileParserEntryPoint(ParserEntryPoint):
     def load(self):
-        from nomad_pv_stability_measurements.parsers.stability_file_parser import (
+        from nomad_ready_pv.parsers.stability_file_parser import (
             StabilityFileParser,
         )
 

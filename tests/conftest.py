@@ -13,7 +13,7 @@ def staging_upload(tmp_path, monkeypatch):
     monkeypatch.setattr(config.fs, 'staging', str(tmp_path / 'staging'))
     upload = StagingUpload(tmp_path / 'source')
     monkeypatch.setattr(
-        'nomad_pv_stability_measurements.schema_packages.utils.find_standard',
+        'nomad_ready_pv.schema_packages.utils.find_standard',
         upload.published_standard,
     )
     return upload

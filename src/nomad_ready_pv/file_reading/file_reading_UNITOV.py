@@ -25,7 +25,7 @@ are of kind `unknown`.
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from nomad_pv_stability_measurements.file_reading.file_reading_utils import (
+from nomad_ready_pv.file_reading.file_reading_utils import (
     read_head,
     read_tail,
 )

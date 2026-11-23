@@ -12,7 +12,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "License :: OSI Approved :: MIT License",
 ]
-name = "nomad-pv-stability-measurements"
+name = "nomad-ready-pv"
 description = "data schemas for indoor and outdoor PV stability measurements with and without standardized protocols"
 version = "0.1.0"
 readme = "README.md"
@@ -30,7 +30,7 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/FAIRmat-NFDI/nomad-pv-stability-measurements"
+Repository = "https://github.com/FAIRmat-NFDI/nomad-ready-pv"
 
 [project.optional-dependencies]
 dev = [
@@ -130,11 +130,11 @@ package-dir = { "" = "src" }
 where = ["src"]
 
 [project.entry-points.'nomad.plugin']
-stability_file_parser_entry_point = "nomad_pv_stability_measurements.parsers:stability_file_parser_entry_point"
-schema_package_entry_point = "nomad_pv_stability_measurements.schema_packages:schema_package_entry_point"
-sample_schema_entry_point = "nomad_pv_stability_measurements.schema_packages:sample_schema_entry_point"
-stability_files_app_entry_point = "nomad_pv_stability_measurements.apps:stability_files_app_entry_point"
-stability_example_upload_entry_point = "nomad_pv_stability_measurements.example_uploads:stability_example_upload_entry_point"
+stability_file_parser_entry_point = "nomad_ready_pv.parsers:stability_file_parser_entry_point"
+schema_package_entry_point = "nomad_ready_pv.schema_packages:schema_package_entry_point"
+sample_schema_entry_point = "nomad_ready_pv.schema_packages:sample_schema_entry_point"
+stability_files_app_entry_point = "nomad_ready_pv.apps:stability_files_app_entry_point"
+stability_example_upload_entry_point = "nomad_ready_pv.example_uploads:stability_example_upload_entry_point"
 
 [tool.cruft]
 # Avoid updating workflow files, this leads to permissions issues

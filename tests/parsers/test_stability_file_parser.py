@@ -6,11 +6,11 @@ from nomad import utils
 from nomad.datamodel import EntryArchive, EntryMetadata, User
 from structlog.testing import capture_logs
 
-from nomad_pv_stability_measurements.file_reading import file_reading_UNITOV
-from nomad_pv_stability_measurements.parsers import (
+from nomad_ready_pv.file_reading import file_reading_UNITOV
+from nomad_ready_pv.parsers import (
     stability_file_parser_entry_point,
 )
-from nomad_pv_stability_measurements.parsers.stability_file_parser import (
+from nomad_ready_pv.parsers.stability_file_parser import (
     StabilityFileParser,
 )
 
@@ -204,7 +204,7 @@ def test_parser_takes_data_files_but_not_archive_or_hidden_files(path, is_regist
 def test_file_entry_knows_how_long_a_period_its_data_cover(
     start_time, end_time, given, duration
 ):
-    from nomad_pv_stability_measurements.schema_packages.schema_package import (
+    from nomad_ready_pv.schema_packages.schema_package import (
         StabilityActivity,
     )
 
@@ -219,7 +219,7 @@ def test_file_entry_knows_how_long_a_period_its_data_cover(
 
 
 def test_a_file_entry_is_named_after_its_path_and_found_by_nomads_search():
-    from nomad_pv_stability_measurements.schema_packages.schema_package import (
+    from nomad_ready_pv.schema_packages.schema_package import (
         StabilityActivity,
         StabilityFile,
     )
@@ -249,10 +249,10 @@ def test_a_file_entry_is_named_after_its_path_and_found_by_nomads_search():
 
 
 def test_the_file_is_the_output_and_the_sample_the_input_of_the_activity():
-    from nomad_pv_stability_measurements.schema_packages.sample_schema import (
+    from nomad_ready_pv.schema_packages.sample_schema import (
         SolarCellSample,
     )
-    from nomad_pv_stability_measurements.schema_packages.schema_package import (
+    from nomad_ready_pv.schema_packages.schema_package import (
         SampleIdentity,
         StabilityActivity,
         StabilityFile,

@@ -40,20 +40,20 @@ from openpyxl.utils import get_column_letter, quote_sheetname
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.protection import SheetProtection
 
-from nomad_pv_stability_measurements.schema_packages.sample_schema import (
+from nomad_ready_pv.schema_packages.sample_schema import (
     Encapsulation,
     LayerProperties,
     ModuleConfiguration,
     SolarCellSample,
     Substrate,
 )
-from nomad_pv_stability_measurements.schema_packages.schema_package import (
+from nomad_ready_pv.schema_packages.schema_package import (
     ProjectData,
     SampleIdentity,
     StabilityActivity,
     StabilityFile,
 )
-from nomad_pv_stability_measurements.schema_packages.utils import (
+from nomad_ready_pv.schema_packages.utils import (
     split_commas,
     unique_lab_id,
 )
@@ -1003,6 +1003,6 @@ def write_project_data_template(path: str, layer_blocks: int = TEMPLATE_LAYER_BL
         _write_sheet(workbook[name], columns, lists)
     _write_guide(guide)
     workbook.active = workbook.worksheets.index(guide)
-    workbook.properties.creator = 'nomad-pv-stability-measurements'
+    workbook.properties.creator = 'nomad-ready-pv'
     workbook.properties.created = datetime(2026, 1, 1)
     workbook.save(path)

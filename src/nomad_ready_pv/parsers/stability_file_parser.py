@@ -8,11 +8,11 @@ from typing import TYPE_CHECKING
 from nomad.datamodel.context import ServerContext
 from nomad.parsing.parser import MatchingParser
 
-from nomad_pv_stability_measurements.file_reading import INSTITUTIONS
-from nomad_pv_stability_measurements.file_reading.file_reading_utils import (
+from nomad_ready_pv.file_reading import INSTITUTIONS
+from nomad_ready_pv.file_reading.file_reading_utils import (
     file_format_from_path,
 )
-from nomad_pv_stability_measurements.parsers.project_data_utils import (
+from nomad_ready_pv.parsers.project_data_utils import (
     PROJECT_DATA_ARCHIVE,
     Spreadsheet,
     clean_sample_id,
@@ -20,16 +20,16 @@ from nomad_pv_stability_measurements.parsers.project_data_utils import (
     load_spreadsheet,
     sample_entry_reference,
 )
-from nomad_pv_stability_measurements.parsers.utils import (
+from nomad_ready_pv.parsers.utils import (
     DescribedFileLogger,
     institution_of,
     uploader_email,
 )
-from nomad_pv_stability_measurements.schema_packages.schema_package import (
+from nomad_ready_pv.schema_packages.schema_package import (
     DATA_TYPES,
     ProjectData,
 )
-from nomad_pv_stability_measurements.schema_packages.utils import (
+from nomad_ready_pv.schema_packages.utils import (
     stability_activity,
     unique_lab_id,
 )

@@ -4,7 +4,7 @@ from nomad import utils
 from nomad.datamodel import EntryArchive, EntryMetadata
 from nomad.parsing.parsers import match_parser
 
-from nomad_pv_stability_measurements.parsers import (
+from nomad_ready_pv.parsers import (
     stability_file_parser_entry_point,
 )
 

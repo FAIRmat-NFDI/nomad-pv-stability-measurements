@@ -20,11 +20,11 @@ def is_quantity(section_def, path: str) -> bool:
 
 
 def test_stability_files_app_uses_quantities_of_the_file_entries():
-    from nomad_pv_stability_measurements.apps import stability_files_app_entry_point
-    from nomad_pv_stability_measurements.apps.stability_files import (
+    from nomad_ready_pv.apps import stability_files_app_entry_point
+    from nomad_ready_pv.apps.stability_files import (
         STABILITY_ACTIVITY,
     )
-    from nomad_pv_stability_measurements.schema_packages.schema_package import (
+    from nomad_ready_pv.schema_packages.schema_package import (
         StabilityActivity,
     )
 

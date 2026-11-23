@@ -15,9 +15,7 @@ from nomad.config.models.ui import (
 )
 
 #: The section whose entries the app lists: one per file of a stability upload.
-STABILITY_ACTIVITY = (
-    'nomad_pv_stability_measurements.schema_packages.schema_package.StabilityActivity'
-)
+STABILITY_ACTIVITY = 'nomad_ready_pv.schema_packages.schema_package.StabilityActivity'
 
 
 #: The full width of the dashboard for each screen size, in grid columns.

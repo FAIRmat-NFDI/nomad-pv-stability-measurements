@@ -1,7 +1,7 @@
 from nomad import utils
 from nomad.datamodel import EntryArchive, EntryMetadata
 
-from nomad_pv_stability_measurements.schema_packages.sample_schema import (
+from nomad_ready_pv.schema_packages.sample_schema import (
     SolarCellSample,
 )
 

@@ -4,10 +4,10 @@ from nomad import utils
 from nomad.datamodel import EntryArchive, EntryMetadata, User
 from nomad.utils import generate_entry_id
 
-from nomad_pv_stability_measurements.parsers import (
+from nomad_ready_pv.parsers import (
     stability_file_parser_entry_point,
 )
-from nomad_pv_stability_measurements.schema_packages.schema_package import (
+from nomad_ready_pv.schema_packages.schema_package import (
     ProjectData,
     StabilityActivityGroup,
 )
@@ -137,7 +137,7 @@ def test_summary_names_the_uploaders_institution_for_files_in_no_folder(
 
 
 def test_summary_links_to_the_files_app_filtered_to_its_upload(staging_upload):
-    from nomad_pv_stability_measurements.apps.stability_files import (
+    from nomad_ready_pv.apps.stability_files import (
         stability_files_app,
     )
 
